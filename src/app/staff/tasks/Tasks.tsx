@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -18,10 +18,10 @@ import {
   type TemplateSummary,
 } from "@/lib/tasks-store";
 import { uploadImage } from "@/lib/tasks-images";
-import { occursOn, parseVirtualId, summary, virtualId, type RepeatRule } from "@/lib/tasks-repeat";
+import { occursOn, parseVirtualId, virtualId } from "@/lib/tasks-repeat";
 import { addDays, fmtMin, fromISODate, toISODate, workDayISO } from "@/lib/time";
 import Editor, { type EditorActions, type Focus } from "./Editor";
-import NewPageMenu from "./NewPageMenu";
+import NewPageView from "./NewPageView";
 import PageMenu from "./PageMenu";
 import type { PickTarget } from "./PagePicker";
 import styles from "./tasks.module.css";
@@ -46,30 +46,6 @@ type Lists = {
   templates: TemplateSummary[];
 };
 
-/* The Templates section's collapsed state lives in localStorage. Read through
-   useSyncExternalStore so the server render (no storage) and the first client
-   render agree, then the stored value takes over without a hydration mismatch. */
-const TEMPLATES_OPEN_KEY = "tasks-templates-open";
-const openListeners = new Set<() => void>();
-const subscribeTemplatesOpen = (l: () => void) => {
-  openListeners.add(l);
-  return () => {
-    openListeners.delete(l);
-  };
-};
-const readTemplatesOpen = () => {
-  try {
-    return localStorage.getItem(TEMPLATES_OPEN_KEY) === "1";
-  } catch {
-    return false;
-  }
-};
-const writeTemplatesOpen = (v: boolean) => {
-  try {
-    localStorage.setItem(TEMPLATES_OPEN_KEY, v ? "1" : "0");
-  } catch {}
-  openListeners.forEach((l) => l());
-};
 type Status = { kind: "" | "ok" | "busy" | "err"; msg: string };
 
 const weekdayOf = (iso: string) =>
@@ -145,9 +121,8 @@ export default function Tasks() {
   // Sidebar lists, tagged with the day they were loaded for so a day change
   // never shows the previous day's pages while the new ones load.
   const [lists, setLists] = useState<Lists>({ day: "", dated: [], undated: [], templates: [] });
-  // The Templates section starts collapsed; the choice sticks per device.
-  const templatesOpen = useSyncExternalStore(subscribeTemplatesOpen, readTemplatesOpen, () => false);
-  const toggleTemplates = () => writeTemplatesOpen(!templatesOpen);
+  /** The full-screen "+" view, and the day its new page is for (null = Ongoing). */
+  const [newFor, setNewFor] = useState<{ day: string | null } | null>(null);
   const dated = lists.day === day ? lists.dated : [];
   const undated = lists.undated;
   const [open, setOpenState] = useState<OpenPage | null>(null);
@@ -576,23 +551,24 @@ export default function Tasks() {
     openNew(page, [emptyBlock(id)], true);
   };
 
-  const createTemplate = (name: string, isRecipe: boolean, repeat: RepeatRule | null) => {
+  /** A template starts empty; its name, icon and repeat rule are set in the editor. */
+  const createTemplate = (isRecipe: boolean) => {
     const id = newId();
     const page: Page = {
       id,
       kind: "template",
       day: null,
-      title: name,
+      title: "",
       emoji: "",
       start_min: null,
       template_id: null,
       is_recipe: isRecipe,
       recipe: [],
       recipe_scale: 1,
-      repeat,
+      repeat: null,
       created_at: new Date().toISOString(),
     };
-    openNew(page, [emptyBlock(id)], false);
+    openNew(page, [emptyBlock(id)], true);
   };
 
   /** Copy a template into a new, independent page. Checklist ticks start clear. */
@@ -1073,6 +1049,29 @@ export default function Tasks() {
 
   return (
     <div className={`${styles.page} ${pageId ? styles.hasOpen : ""}`}>
+      {newFor && (
+        <NewPageView
+          dayLabel={newFor.day === null ? null : newFor.day === today ? "today" : forDayLabel(newFor.day)}
+          templates={lists.templates}
+          onClose={() => setNewFor(null)}
+          onBlank={() => {
+            setNewFor(null);
+            createBlank(newFor.day);
+          }}
+          onPick={(tid) => {
+            setNewFor(null);
+            createFromTemplate(tid, newFor.day);
+          }}
+          onEdit={(tid) => {
+            setNewFor(null);
+            go({ page: tid });
+          }}
+          onNewTemplate={(isRecipe) => {
+            setNewFor(null);
+            createTemplate(isRecipe);
+          }}
+        />
+      )}
       <aside className={styles.sidebar}>
         <div className={styles.dateBar}>
           <button
@@ -1118,97 +1117,21 @@ export default function Tasks() {
           items={dated}
           openId={lead > 0 && pageId ? prepId(pageId, lead) : pageId}
           empty={lists.day === day ? "Nothing planned for this day." : ""}
-          onBlank={() => createBlank(day)}
-          onFromTemplate={(tid) => createFromTemplate(tid, day)}
-          onEditTemplate={(tid) => go({ page: tid })}
-          onCreateTemplate={createTemplate}
+          onAdd={() => setNewFor({ day })}
           onOpen={(id, l) => go({ page: id, lead: l ?? 0 })}
           onMove={movePageById}
           onDelete={deletePageById}
-          today={today}
         />
         <Section
           title="Ongoing"
           items={undated}
           openId={pageId}
           empty="Pages that aren’t tied to a day live here."
-          onBlank={() => createBlank(null)}
-          onFromTemplate={(tid) => createFromTemplate(tid, null)}
-          onEditTemplate={(tid) => go({ page: tid })}
-          onCreateTemplate={createTemplate}
+          onAdd={() => setNewFor({ day: null })}
           onOpen={(id, l) => go({ page: id, lead: l ?? 0 })}
           onMove={movePageById}
           onDelete={deletePageById}
-          today={today}
         />
-
-        <section className={styles.section}>
-          <header className={styles.sectionHead}>
-            <h2>
-              <button
-                type="button"
-                className={styles.collapseBtn}
-                onClick={toggleTemplates}
-                aria-expanded={templatesOpen}
-              >
-                Templates
-                <span className={styles.chev} aria-hidden="true">
-                  {templatesOpen ? "▾" : "▸"}
-                </span>
-              </button>
-            </h2>
-            <NewPageMenu
-              mode="template"
-              label="New template"
-              today={today}
-              loadTemplates={loadTemplates}
-              onBlank={() => {}}
-              onFromTemplate={(tid) => createFromTemplate(tid, day)}
-              onEditTemplate={(tid) => go({ page: tid })}
-              onCreateTemplate={createTemplate}
-            />
-          </header>
-          {templatesOpen &&
-            (lists.templates.length === 0 ? (
-              <p className={styles.empty}>No templates yet. Add one with +.</p>
-            ) : (
-              <ul className={styles.list}>
-                {lists.templates.map((t) => {
-                  const label = `${t.emoji} ${t.title}`.trim();
-                  return (
-                    <li key={t.id} className={`${styles.item} ${t.id === pageId ? styles.itemOn : ""}`}>
-                      <button
-                        type="button"
-                        className={styles.itemMain}
-                        onClick={() => go({ page: t.id, lead: 0 })}
-                      >
-                        <span className={styles.itemEmoji}>{t.emoji || "📄"}</span>
-                        <span className={styles.itemBody}>
-                          <span className={`${styles.itemTitle} ${t.title ? "" : styles.untitled}`}>
-                            {t.title || "Untitled"}
-                          </span>
-                          {(t.repeat || t.is_recipe) && (
-                            <span className={styles.itemMeta}>
-                              {t.repeat && <span>↻ {summary(t.repeat)}</span>}
-                              {t.is_recipe && <span>Recipe</span>}
-                            </span>
-                          )}
-                        </span>
-                      </button>
-                      <PageMenu
-                        currentDay={null}
-                        canMove={false}
-                        onMove={() => {}}
-                        onDelete={() => deletePageById(t.id, label, Boolean(t.repeat))}
-                        align="right"
-                        label={`Menu for template ${label || "Untitled"}`}
-                      />
-                    </li>
-                  );
-                })}
-              </ul>
-            ))}
-        </section>
 
         <div className={styles.sideFoot}>
           <span className={styles.status}>
@@ -1278,12 +1201,8 @@ type SectionProps = {
   items: PageSummary[];
   openId: string | null;
   empty: string;
-  onBlank: () => void;
-  onFromTemplate: (templateId: string) => void;
-  onEditTemplate: (templateId: string) => void;
-  onCreateTemplate: (name: string, isRecipe: boolean, repeat: RepeatRule | null) => void;
+  onAdd: () => void;
   onOpen: (id: string, lead?: number) => void;
-  today: string;
   onMove: (id: string, day: string | null) => void;
   onDelete: (id: string, label: string) => void;
 };
@@ -1291,35 +1210,23 @@ type SectionProps = {
 const forDayLabel = (iso: string) =>
   fromISODate(iso).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 
-const loadTemplates = () => store.listTemplates();
-
 function Section({
   title,
   items,
   openId,
   empty,
-  onBlank,
-  onFromTemplate,
-  onEditTemplate,
-  onCreateTemplate,
+  onAdd,
   onOpen,
   onMove,
   onDelete,
-  today,
 }: SectionProps) {
   return (
     <section className={styles.section}>
       <header className={styles.sectionHead}>
         <h2>{title}</h2>
-        <NewPageMenu
-          label={`Add page: ${title}`}
-          today={today}
-          loadTemplates={loadTemplates}
-          onBlank={onBlank}
-          onFromTemplate={onFromTemplate}
-          onEditTemplate={onEditTemplate}
-          onCreateTemplate={onCreateTemplate}
-        />
+        <button type="button" className={styles.addBtn} aria-label={`Add page: ${title}`} onClick={onAdd}>
+          +
+        </button>
       </header>
       {items.length === 0 ? (
         <p className={styles.empty}>{empty}</p>

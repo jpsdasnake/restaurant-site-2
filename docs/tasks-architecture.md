@@ -145,15 +145,22 @@ would replace the poll with no schema change.
 
 ## Templates (step 4)
 
-- Templates live in a collapsible "Templates" section at the bottom of the
-  sidebar (collapsed by default, remembered per device), each row showing
-  its repeat rule in words and a Recipe tag; tapping opens it, the section's
-  "+" creates one. The "+" chooser on the day sections also offers Blank
-  page or From template (tap to use, pencil to edit, "New template…").
-- Create template: insert a `task_pages` row with `kind='template'`, plus
-  `is_recipe` (and, from step 6, `repeat`) answered in the creation flow.
-  Edited in the same editor as a page, marked with a Template tag and a
-  "Use for <day>" button; its menu offers Delete only.
+- Templates have no sidebar section of their own (removed 2026-10-13).
+  Every "+" in the sidebar opens the full-screen **New page** view
+  (`NewPageView.tsx`): a header naming the day ("New page for Tue 13 Oct",
+  "New ongoing page") with a small Blank page button and Close, a title
+  filter, then two columns, **Recipes** (`is_recipe`) and **Checklists**,
+  side by side on a tablet and stacked on a phone. Rows are ordered repeats
+  first, then by title; tapping a row makes the page for that day, its Edit
+  button opens the template instead. Each column ends with "+ New recipe" /
+  "+ New checklist". Blank page is deliberately low-key: recipes are added
+  daily, blank pages rarely.
+- Create template: "+ New recipe" / "+ New checklist" insert a
+  `task_pages` row with `kind='template'`, an empty title and `is_recipe`
+  set by which button was tapped, then open it with the title focused; the
+  name, icon, start time and repeat rule are all set in the editor (no
+  creation form). Edited in the same editor as a page, marked with a
+  Template tag and a "Use for <day>" button; its menu offers Delete only.
 - Create page from template: read template + blocks, insert a new page with
   `template_id = template.id`, `kind='page'`, chosen `day` (or null), copied
   `title`/`emoji`/`start_min`/`recipe`, then bulk-insert copied blocks with
@@ -268,7 +275,7 @@ would replace the poll with no schema change.
 | `src/lib/tasks-repeat.ts` | Rule → occurrences for a date range (step 6) |
 | `src/app/staff/tasks/` | `page.tsx`, `Tasks.tsx` (layout, sidebar, data + sync), `Editor.tsx` (blocks), `PageMenu.tsx`, `EmojiPicker.tsx`, `tasks.module.css` |
 | `src/app/staff/tasks/Lightbox.tsx` | Full-screen image viewer (swipe, remove, add) |
-| `src/app/staff/tasks/NewPageMenu.tsx` | The "+" chooser: blank / from template / new template |
+| `src/app/staff/tasks/NewPageView.tsx` | The full-screen "+" view: Recipes / Checklists to use or edit, new template, Blank page |
 | `src/app/staff/tasks/RecipeTable.tsx` | Ingredient table: editable on templates, scale-by-base-row on pages |
 | `src/app/staff/tasks/blockText.ts` | Block text ⇄ contentEditable DOM with pills; caret offset mapping |
 | `src/lib/tasks-recipe.ts` | Tokens, amount formatting, scaling helpers |
