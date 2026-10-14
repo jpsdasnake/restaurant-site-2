@@ -453,34 +453,56 @@ export default function Tasks() {
     };
   }, [refreshLists, refreshOpen, flushAll]);
 
-  // A new working day (3:00): if they were on the old today, close whatever
-  // was open (usually last night's closing list) and show the new day.
-  // A day picked on purpose stays put. Never while someone is typing.
+  // A new working day (3:00): whatever was showing, close it and start from
+  // the new day's list with no page open. The tablet app stays open for days
+  // and Android freezes it while the screen is off, so the minute timer is
+  // only a fallback for a screen left on: the real triggers are the wake
+  // events and the first touch of the morning, which is swallowed so it can't
+  // act on yesterday's list.
   const todayRef = useRef(today);
   useEffect(() => {
     const check = () => {
       const now = workDayISO();
-      const was = todayRef.current;
-      if (now === was) return;
-      const a = document.activeElement as HTMLElement | null;
-      if (a && (a.isContentEditable || a.tagName === "INPUT" || a.tagName === "TEXTAREA")) return;
+      if (now === todayRef.current) return false;
       todayRef.current = now;
       setToday(now);
-      const onOldToday = !urlRef.current.day || urlRef.current.day === was;
-      if (onOldToday) {
-        setOpen(null);
-        setOpenStateKind("idle");
-        go({ day: null, page: null, lead: 0 });
-      }
+      setNewFor(null);
+      setOpen(null);
+      setOpenStateKind("idle");
+      go({ day: null, page: null, lead: 0 });
+      return true;
     };
-    const interval = setInterval(check, 60_000);
-    const onVis = () => {
+    const onWake = () => {
       if (document.visibilityState === "visible") check();
     };
-    document.addEventListener("visibilitychange", onVis);
+    let swallowClick = false;
+    const onPointerDown = (e: PointerEvent) => {
+      if (!check()) return;
+      e.preventDefault();
+      swallowClick = true;
+    };
+    const onClick = (e: MouseEvent) => {
+      if (!swallowClick) return;
+      swallowClick = false;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    const interval = setInterval(check, 60_000);
+    document.addEventListener("visibilitychange", onWake);
+    window.addEventListener("focus", onWake);
+    window.addEventListener("pageshow", onWake);
+    // Page Lifecycle API: Chrome thawing a frozen page.
+    document.addEventListener("resume", onWake);
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("click", onClick, true);
     return () => {
       clearInterval(interval);
-      document.removeEventListener("visibilitychange", onVis);
+      document.removeEventListener("visibilitychange", onWake);
+      window.removeEventListener("focus", onWake);
+      window.removeEventListener("pageshow", onWake);
+      document.removeEventListener("resume", onWake);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("click", onClick, true);
     };
   }, [go]);
 
