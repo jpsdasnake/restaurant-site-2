@@ -41,6 +41,48 @@ const filterIngredients = (rows: RecipeRow[], query: string) => {
   return rows.filter((r) => r.name.trim() && (!q || r.name.toLowerCase().includes(q)));
 };
 
+/* ---------- start time chip ---------- */
+
+/** The page's start time as a chip; the native time picker sits invisibly on top. */
+function TimeChip({
+  value,
+  onChange,
+}: {
+  value: number | null;
+  onChange: (min: number | null) => void;
+}) {
+  return (
+    <span className={`${styles.chip} ${styles.timeChip} ${value === null ? styles.chipEmpty : ""}`}>
+      <span aria-hidden>🕑</span>
+      {value === null ? "Start time" : fmtMin(value)}
+      <input
+        type="time"
+        className={styles.timeInput}
+        value={value === null ? "" : fmtMin(value)}
+        onClick={(e) => {
+          try {
+            e.currentTarget.showPicker();
+          } catch {
+            // Older browsers open their picker on focus anyway.
+          }
+        }}
+        onChange={(e) => onChange(e.target.value ? parseTime(e.target.value) : null)}
+        aria-label="Start time"
+      />
+      {value !== null && (
+        <button
+          type="button"
+          className={styles.chipClear}
+          aria-label="Clear start time"
+          onClick={() => onChange(null)}
+        >
+          ×
+        </button>
+      )}
+    </span>
+  );
+}
+
 /* ---------- types ---------- */
 
 export type Focus = { id: string; offset: number | "end" } | null;
@@ -218,81 +260,30 @@ export default function Editor({
     setLocalFocus(null);
   };
 
-  const timeValue = page.start_min === null ? "" : fmtMin(page.start_min);
-
   return (
     <div className={styles.editor}>
       <div className={styles.editorTop}>
         <button type="button" className={styles.backBtn} onClick={onBack}>
           ‹ Pages
         </button>
-        {isTemplate && (
-          <div className={styles.templateBar}>
-            <span className={styles.tag}>Template</span>
-            {page.is_recipe && <span className={styles.tag}>Recipe</span>}
-            <button
-              type="button"
-              className={`${styles.repeatChip} ${page.repeat ? styles.repeatOn : ""}`}
-              onClick={() => setRepeatDialog(true)}
-              title="Change how this template repeats"
-            >
-              ↻ {page.repeat ? summary(page.repeat) : "Does not repeat"}
-            </button>
-            {/* A repeating template puts its pages on the right days itself. */}
-            {!page.repeat && (
-              <button type="button" className={styles.useBtn} onClick={actions.useTemplate}>
-                Add to {dayLabel}
-              </button>
-            )}
-          </div>
+        {/* A repeating template puts its pages on the right days itself. */}
+        {isTemplate && !page.repeat && (
+          <button type="button" className={styles.useBtn} onClick={actions.useTemplate}>
+            Add to {dayLabel}
+          </button>
         )}
-        {!isTemplate && page.template_id && (
-          <div className={styles.templateBar}>
-            {virtual && (
-              <span className={styles.tag} title="Edits turn this into a real page">
-                ↻ Not started
-              </span>
-            )}
-            <button type="button" className={styles.linkBtn} onClick={actions.editTemplate}>
-              ✎ Edit template
-            </button>
-          </div>
-        )}
-        <div className={styles.editorMeta}>
-          <label className={styles.timeField}>
-            <span>Start</span>
-            <input
-              type="time"
-              value={timeValue}
-              onChange={(e) =>
-                actions.patchPage({ start_min: e.target.value ? parseTime(e.target.value) : null })
-              }
-              aria-label="Start time"
-            />
-            {page.start_min !== null && (
-              <button
-                type="button"
-                className={styles.clearTime}
-                aria-label="Clear start time"
-                onClick={() => actions.patchPage({ start_min: null })}
-              >
-                ×
-              </button>
-            )}
-          </label>
-          <PageMenu
-            currentDay={page.day}
-            onMove={actions.movePage}
-            onDelete={actions.deletePage}
-            align="right"
-            canMove={!isTemplate}
-            extra={
-              showContent && blocks.length > 0 && !selecting
-                ? [{ label: "Select blocks…", onClick: () => startSelect() }]
-                : []
-            }
-          />
-        </div>
+        <PageMenu
+          currentDay={page.day}
+          onMove={actions.movePage}
+          onDelete={actions.deletePage}
+          align="right"
+          canMove={!isTemplate}
+          extra={
+            showContent && blocks.length > 0 && !selecting
+              ? [{ label: "Select blocks…", onClick: () => startSelect() }]
+              : []
+          }
+        />
       </div>
 
       <div className={styles.titleRow}>
@@ -311,6 +302,33 @@ export default function Editor({
           }}
           aria-label="Title"
         />
+      </div>
+
+      <div className={styles.metaRow}>
+        {isTemplate && (
+          <span className={styles.tag}>{page.is_recipe ? "Recipe template" : "Template"}</span>
+        )}
+        {virtual && (
+          <span className={styles.tag} title="Edits turn this into a real page">
+            ↻ Not started
+          </span>
+        )}
+        <TimeChip value={page.start_min} onChange={(start_min) => actions.patchPage({ start_min })} />
+        {isTemplate && (
+          <button
+            type="button"
+            className={`${styles.chip} ${page.repeat ? styles.chipOn : ""}`}
+            onClick={() => setRepeatDialog(true)}
+            title="Change how this template repeats"
+          >
+            ↻ {page.repeat ? summary(page.repeat) : "Does not repeat"}
+          </button>
+        )}
+        {!isTemplate && page.template_id && (
+          <button type="button" className={styles.chip} onClick={actions.editTemplate}>
+            ✎ Edit template
+          </button>
+        )}
       </div>
 
       {page.is_recipe && (

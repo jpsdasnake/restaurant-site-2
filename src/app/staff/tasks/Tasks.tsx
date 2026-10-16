@@ -1218,6 +1218,35 @@ export default function Tasks() {
 
 /* ---------- sidebar section ---------- */
 
+/** Checklist progress as a small ring; a filled tick once everything is done. */
+function Ring({ done, total }: { done: number; total: number }) {
+  if (!total) return <span className={styles.ring} />;
+  const r = 8;
+  const c = 2 * Math.PI * r;
+  return (
+    <span className={styles.ring} title={`${done} of ${total} done`}>
+      <svg viewBox="0 0 20 20" width="20" height="20" aria-hidden>
+        <circle cx="10" cy="10" r={r} className={styles.ringTrack} />
+        {done === total ? (
+          <>
+            <circle cx="10" cy="10" r={r + 1} className={styles.ringDone} />
+            <path d="M6.2 10.3l2.5 2.4 5-5.2" className={styles.ringTick} />
+          </>
+        ) : done > 0 ? (
+          <circle
+            cx="10"
+            cy="10"
+            r={r}
+            className={styles.ringFill}
+            strokeDasharray={`${(done / total) * c} ${c}`}
+            transform="rotate(-90 10 10)"
+          />
+        ) : null}
+      </svg>
+    </span>
+  );
+}
+
 type SectionProps = {
   title: string;
   items: PageSummary[];
@@ -1255,7 +1284,6 @@ function Section({
       ) : (
         <ul className={styles.list}>
           {items.map((p) => {
-            const pct = p.todo_total ? Math.round((p.todo_done / p.todo_total) * 100) : 0;
             const label = `${p.emoji} ${p.title}`.trim();
             if (p.prep) {
               const { prep } = p;
@@ -1288,16 +1316,10 @@ function Section({
                           </span>
                         )}
                       </span>
-                      {p.todo_total > 0 && (
-                        <span className={styles.bar}>
-                          <span
-                            className={`${styles.barFill} ${pct === 100 ? styles.barDone : ""}`}
-                            style={{ width: `${pct}%` }}
-                          />
-                        </span>
-                      )}
                     </span>
+                    <Ring done={p.todo_done} total={p.todo_total} />
                   </button>
+                  <span className={styles.menuSpacer} />
                 </li>
               );
             }
@@ -1330,15 +1352,8 @@ function Section({
                         )}
                       </span>
                     )}
-                    {p.todo_total > 0 && (
-                      <span className={styles.bar}>
-                        <span
-                          className={`${styles.barFill} ${pct === 100 ? styles.barDone : ""}`}
-                          style={{ width: `${pct}%` }}
-                        />
-                      </span>
-                    )}
                   </span>
+                  <Ring done={p.todo_done} total={p.todo_total} />
                 </button>
                 <PageMenu
                   currentDay={p.day}

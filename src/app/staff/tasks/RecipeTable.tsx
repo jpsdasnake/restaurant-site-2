@@ -152,46 +152,48 @@ function PageTable({
           </>
         )}
       </div>
-      {rows.map((r) => {
-        const isBase = base?.id === r.id;
-        const canBase = r.amount > 0;
-        return (
-          <div key={r.id} className={`${styles.rtRow} ${styles.rtRowPage} ${isBase ? styles.rtBase : ""}`}>
-            {isBase ? (
-              <input
-                className={`${styles.rtAmount} ${styles.rtAmountBase}`}
-                inputMode="decimal"
-                autoFocus
-                onFocus={(e) => e.target.select()} // typing replaces the old amount
-                value={base.raw}
-                onChange={(e) => {
-                  const raw = e.target.value;
-                  setBase({ id: r.id, raw });
-                  const n = parseAmount(raw);
-                  if (n !== null && n > 0) onScale(n / r.amount);
-                }}
-                onBlur={() => setBase(null)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === "Escape") (e.target as HTMLInputElement).blur();
-                }}
-                aria-label={`Amount of ${r.name}`}
-              />
-            ) : (
-              <button
-                type="button"
-                className={`${styles.rtAmount} ${styles.rtAmountBtn}`}
-                disabled={!canBase}
-                onClick={() => setBase({ id: r.id, raw: fmtAmount(r.amount * scale) })}
-                title={canBase ? "Change this amount and scale the rest" : undefined}
-              >
-                {fmtAmount(r.amount * scale)}
-              </button>
-            )}
-            <span className={styles.rtUnitText}>{r.unit}</span>
-            <span className={styles.rtNameText}>{r.name}</span>
-          </div>
-        );
-      })}
+      <div className={styles.rtCard}>
+        {rows.map((r) => {
+          const isBase = base?.id === r.id;
+          const canBase = r.amount > 0;
+          return (
+            <div key={r.id} className={`${styles.rtRow} ${styles.rtRowPage} ${isBase ? styles.rtBase : ""}`}>
+              {isBase ? (
+                <input
+                  className={`${styles.rtAmount} ${styles.rtAmountBase}`}
+                  inputMode="decimal"
+                  autoFocus
+                  onFocus={(e) => e.target.select()} // typing replaces the old amount
+                  value={base.raw}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    setBase({ id: r.id, raw });
+                    const n = parseAmount(raw);
+                    if (n !== null && n > 0) onScale(n / r.amount);
+                  }}
+                  onBlur={() => setBase(null)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === "Escape") (e.target as HTMLInputElement).blur();
+                  }}
+                  aria-label={`Amount of ${r.name}`}
+                />
+              ) : (
+                <button
+                  type="button"
+                  className={`${styles.rtAmount} ${styles.rtAmountBtn}`}
+                  disabled={!canBase}
+                  onClick={() => setBase({ id: r.id, raw: fmtAmount(r.amount * scale) })}
+                  title={canBase ? "Change this amount and scale the rest" : undefined}
+                >
+                  {fmtAmount(r.amount * scale)}
+                </button>
+              )}
+              <span className={styles.rtUnitText}>{r.unit}</span>
+              <span className={styles.rtNameText}>{r.name}</span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
