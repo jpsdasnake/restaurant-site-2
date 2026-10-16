@@ -400,7 +400,7 @@ export default function Schedule() {
                 <div
                   key={dayISO}
                   className={styles.daycol}
-                  style={{ flexGrow: laneCount, minWidth: 132 * laneCount }}
+                  style={{ minWidth: Math.max(132, 72 * laneCount) }}
                 >
                   <div
                     className={`${styles.dayhead} ${dayISO === todayISO ? styles.dayheadToday : ""}`}

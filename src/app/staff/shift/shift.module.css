@@ -1,23 +1,18 @@
 .page {
-  --bg: #f6f5f2;
-  --card: #fff;
-  --ink: #1f2328;
-  --muted: #6b7280;
-  --line: #e6e3dd;
-  --filled: #0f766e;
-  --filled-bg: #eefaf7;
-  --filled-line: #b3e0d7;
-  --empty: #c2410c;
-  --empty-bg: #fff4ec;
-  --empty-line: #f3c9ae;
+  /* status: green means someone is assigned, orange means the slot is open */
+  --filled: var(--ok);
+  --filled-bg: var(--ok-bg);
+  --filled-line: var(--ok-line);
+  --empty: var(--warn);
+  --empty-bg: var(--warn-bg);
+  --empty-line: var(--warn-line);
 
   margin: 0;
   padding: 28px 20px 60px;
   background: var(--bg);
   color: var(--ink);
   min-height: 100dvh;
-  font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto,
-    Helvetica, Arial, sans-serif;
+  font: 15px/1.45 var(--font-sans);
 }
 .page * {
   box-sizing: border-box;
@@ -39,7 +34,7 @@
   font-size: 20px;
 }
 .card a {
-  color: #1d4ed8;
+  color: var(--accent);
   text-decoration: none;
   font-size: 13.5px;
 }
@@ -82,7 +77,7 @@
   font: inherit;
   font-size: 14px;
   color: var(--ink);
-  background: #fcfcfb;
+  background: var(--card);
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 7px 9px;
@@ -181,7 +176,7 @@
   cursor: pointer;
 }
 .addItem button:hover {
-  background: #f1efeb;
+  background: var(--hover);
 }
 .addItem button:disabled {
   opacity: 0.5;
@@ -202,21 +197,21 @@
   font-size: 13px;
   padding: 6px 12px;
   border-radius: 8px;
-  border: 1px solid var(--empty-line);
-  background: var(--empty-bg);
-  color: var(--empty);
+  border: 1px solid var(--danger-line);
+  background: var(--danger-bg);
+  color: var(--danger);
   cursor: pointer;
 }
 .danger:hover {
-  background: #ffe8d9;
+  border-color: var(--danger);
 }
 .statusText {
   font-size: 12.5px;
   color: var(--muted);
 }
 .statusText[data-kind="err"] {
-  color: #dc2626;
+  color: var(--danger);
 }
 .statusText[data-kind="ok"] {
-  color: #16a34a;
+  color: var(--ok);
 }
