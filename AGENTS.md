@@ -31,5 +31,8 @@ dev and production.
   a short imperative title. Push only when asked (a push deploys).
 - Copy conventions: the undated section is "Ongoing"; recipe views are
   "Ingredients" and "Steps"; untouched repeat occurrences are "not started".
+- Colours, shadows and the font come from the tokens in `src/app/globals.css`
+  (light and dark, following the device setting); module CSS uses
+  `var(--…)` rather than hex values, so every page keeps working in dark mode.
 - Sidebar and menus are built for a tablet in landscape; keep tap targets
   ≥ 36 px and check the phone layout (< 760 px) when changing layout.
