@@ -267,6 +267,85 @@ export default function Tasks() {
     go({ day: d });
   };
 
+  // Touch gestures on the sidebar: swipe sideways for the next or previous
+  // day; press and hold a page to open its menu.
+  const asideRef = useRef<HTMLElement>(null);
+  const swipeDayRef = useRef<(dir: 1 | -1) => void>(() => {});
+  useEffect(() => {
+    swipeDayRef.current = (dir) => goDay(toISODate(addDays(fromISODate(day), dir)));
+  });
+  useEffect(() => {
+    const el = asideRef.current;
+    if (!el) return;
+    let start: { x: number; y: number; t: number; id: number } | null = null;
+    let hold: ReturnType<typeof setTimeout> | null = null;
+    // A swipe often ends without any click, so this is a short window rather
+    // than a flag that would eat the next real tap.
+    let swallowUntil = 0;
+    const cancelHold = () => {
+      if (hold) clearTimeout(hold);
+      hold = null;
+    };
+    const onDown = (e: PointerEvent) => {
+      if (e.pointerType !== "touch" || start) return;
+      start = { x: e.clientX, y: e.clientY, t: Date.now(), id: e.pointerId };
+      const row = (e.target as Element).closest<HTMLElement>("[data-row]");
+      if (row)
+        hold = setTimeout(() => {
+          hold = null;
+          start = null;
+          navigator.vibrate?.(10);
+          row.querySelector<HTMLButtonElement>("button[aria-expanded]")?.click();
+          swallowUntil = Date.now() + 800; // after our own click, so only the finger's lift-off is eaten
+        }, 500);
+    };
+    const onMove = (e: PointerEvent) => {
+      if (!start || e.pointerId !== start.id) return;
+      if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > 10) cancelHold();
+    };
+    const onUp = (e: PointerEvent) => {
+      cancelHold();
+      if (!start || e.pointerId !== start.id) return;
+      const dx = e.clientX - start.x;
+      const dy = e.clientY - start.y;
+      const quick = Date.now() - start.t < 700;
+      start = null;
+      if (quick && Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy)) {
+        swallowUntil = Date.now() + 400;
+        swipeDayRef.current(dx < 0 ? 1 : -1);
+      }
+    };
+    const onCancel = () => {
+      cancelHold();
+      start = null;
+    };
+    // The click that ends a swipe or a long press mustn't also open a page.
+    const onClick = (e: MouseEvent) => {
+      if (Date.now() > swallowUntil) return;
+      swallowUntil = 0;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    const onContext = (e: Event) => {
+      if ((e.target as Element).closest("[data-row]")) e.preventDefault();
+    };
+    el.addEventListener("pointerdown", onDown);
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", onUp);
+    el.addEventListener("pointercancel", onCancel);
+    el.addEventListener("click", onClick, true);
+    el.addEventListener("contextmenu", onContext);
+    return () => {
+      cancelHold();
+      el.removeEventListener("pointerdown", onDown);
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerup", onUp);
+      el.removeEventListener("pointercancel", onCancel);
+      el.removeEventListener("click", onClick, true);
+      el.removeEventListener("contextmenu", onContext);
+    };
+  }, []);
+
   /* ----- loading ----- */
 
   const lastSyncRef = useRef(0);
@@ -1255,7 +1334,7 @@ export default function Tasks() {
           }}
         />
       )}
-      <aside className={styles.sidebar}>
+      <aside className={styles.sidebar} ref={asideRef}>
         <div className={styles.dateBar}>
           <button
             type="button"
@@ -1507,6 +1586,7 @@ function Section({
             return (
               <li
                 key={p.id}
+                data-row
                 className={`${styles.item} ${p.id === openId ? styles.itemOn : ""} ${
                   p.virtual ? styles.itemVirtual : ""
                 }`}

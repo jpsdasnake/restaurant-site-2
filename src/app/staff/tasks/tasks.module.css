@@ -21,11 +21,21 @@
   color: inherit;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+  transition: transform 0.08s ease-out;
+}
+/* Every tap answers at once: buttons give a little, rows darken. */
+:where(.page) button:active:not(:disabled) {
+  transform: scale(0.96);
+}
+:where(.page) :is(.itemMain, .newRowMain, .popItem, .popRowMain, .slashItem):active {
+  transform: none;
+  background: var(--hover);
 }
 
 /* ---------- sidebar ---------- */
 
 .sidebar {
+  touch-action: pan-y; /* sideways swipes change the day */
   width: var(--side-w);
   flex: 0 0 auto;
   display: flex;
@@ -167,6 +177,8 @@
   display: flex;
   align-items: stretch;
   border-radius: 10px;
+  -webkit-touch-callout: none; /* press and hold opens the page menu instead */
+  user-select: none;
 }
 .item:hover {
   background: var(--hover);
@@ -1027,11 +1039,18 @@
 .check:hover {
   border-color: var(--accent);
 }
+.check {
+  transition:
+    background-color 0.12s,
+    border-color 0.12s;
+}
 .check:checked {
   background: var(--accent-fill);
   border-color: var(--accent-fill);
 }
-.check:checked::after {
+/* The tick is always there, scaled to nothing until checked, so it pops in
+   on a tap but not when a page opens with boxes already ticked. */
+.check::after {
   content: "";
   position: absolute;
   left: 6px;
@@ -1040,11 +1059,18 @@
   height: 11px;
   border: solid var(--on-accent);
   border-width: 0 2.5px 2.5px 0;
-  transform: rotate(45deg);
+  transform: rotate(45deg) scale(0);
+  transition: transform 0.18s cubic-bezier(0.3, 1.6, 0.6, 1);
+}
+.check:checked::after {
+  transform: rotate(45deg) scale(1);
 }
 .check:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+.blockText {
+  transition: color 0.15s;
 }
 .doneText {
   color: var(--muted);
