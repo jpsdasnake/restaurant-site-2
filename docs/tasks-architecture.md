@@ -158,6 +158,16 @@ a plain WebSocket (still no supabase-js) and subscribes to
 - Ticking a box updates the sidebar's progress ring locally; several ticks
   share one list refresh.
 
+### Cook mode
+
+"▶ Cook" on a recipe page or template opens `CookMode.tsx`: one step per
+screen (every non-empty block except headers; a header names the steps
+under it), big text with the pills at the current scale, the amounts that
+step uses, its timers and its first photo. Back / Next (or a swipe, or the
+arrow keys) move between steps; "Done · next" ticks a checklist step on the
+page itself. It opens at the first unticked step. Pages get ×½ ×1 ×2 ×3
+buttons, which set `recipe_scale` like rebasing on a row does.
+
 ### Kitchen timers
 
 - A step that mentions a time ("rest 30 min", "1 h 15 min", "20–25

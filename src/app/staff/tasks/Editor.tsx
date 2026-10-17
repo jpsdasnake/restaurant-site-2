@@ -15,6 +15,7 @@ import {
   serialize,
   setCaretModel,
 } from "./blockText";
+import CookMode from "./CookMode";
 import EmojiPicker from "./EmojiPicker";
 import Lightbox from "./Lightbox";
 import PageMenu from "./PageMenu";
@@ -228,6 +229,7 @@ export default function Editor({
   const [viewer, setViewer] = useState<{ blockId: string; index: number } | null>(null);
   const [viewerAdding, setViewerAdding] = useState(false);
   const [view, setView] = useState<"table" | "content">("table");
+  const [cooking, setCooking] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
   const viewerBlock = viewer ? blocks.find((b) => b.id === viewer.blockId) ?? null : null;
   const closeViewer = () => setViewer(null);
@@ -267,10 +269,28 @@ export default function Editor({
 
   return (
     <div className={styles.editor}>
+      {cooking && (
+        <CookMode
+          page={page}
+          blocks={groups.flatMap((g) => g.blocks)}
+          rows={rows}
+          scale={scale}
+          canScale={!isTemplate}
+          onScale={(recipe_scale) => actions.patchPage({ recipe_scale })}
+          onToggle={actions.toggleDone}
+          onStartTimer={actions.markStarted}
+          onClose={() => setCooking(false)}
+        />
+      )}
       <div className={styles.editorTop}>
         <button type="button" className={styles.backBtn} onClick={onBack}>
           ‹ Pages
         </button>
+        {page.is_recipe && (
+          <button type="button" className={styles.cookBtn} onClick={() => setCooking(true)}>
+            ▶ Cook
+          </button>
+        )}
         {/* A repeating template puts its pages on the right days itself. */}
         {isTemplate && !page.repeat && (
           <button type="button" className={styles.useBtn} onClick={actions.useTemplate}>
