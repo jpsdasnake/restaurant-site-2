@@ -225,22 +225,43 @@ export default function Tasks() {
   const hasPending = () => pendingText.current.size > 0 || pendingPage.current !== null;
 
   /* ----- navigation (URL is the source of truth for day + open page) ----- */
+
+  // Opening a page from the list adds a history entry, so the phone's back
+  // gesture returns to the list instead of leaving the app; everything else
+  // (day changes, page to page) replaces the current entry.
+  const pushedRef = useRef(false);
+  useEffect(() => {
+    if (!pageId) pushedRef.current = false;
+  }, [pageId]);
+
   const go = useCallback(
     (next: { day?: string | null; page?: string | null; lead?: number }) => {
       flushAll();
       const d = next.day === undefined ? urlRef.current.day || today : next.day;
       const p = next.page === undefined ? urlRef.current.page : next.page;
       const l = next.lead === undefined ? urlRef.current.lead : next.lead > 0 ? String(next.lead) : null;
+      const opening = Boolean(p) && !urlRef.current.page;
       urlRef.current = { day: d, page: p, lead: p ? l : null };
       const q = new URLSearchParams();
       if (d) q.set("day", d);
       if (p) q.set("page", p);
       if (p && l) q.set("lead", l);
       const qs = q.toString();
-      router.replace(`/staff/tasks${qs ? "?" + qs : ""}`, { scroll: false });
+      const url = `/staff/tasks${qs ? "?" + qs : ""}`;
+      if (opening) {
+        pushedRef.current = true;
+        router.push(url, { scroll: false });
+      } else router.replace(url, { scroll: false });
     },
     [flushAll, router, today]
   );
+
+  /** ‹ › and the date picker: remembers the direction so the list slides the right way. */
+  const [dayDir, setDayDir] = useState<1 | -1>(1);
+  const goDay = (d: string) => {
+    setDayDir(d < day ? -1 : 1);
+    go({ day: d });
+  };
 
   /* ----- loading ----- */
 
@@ -572,7 +593,13 @@ export default function Tasks() {
   const closeOpen = () => {
     setOpen(null);
     setOpenStateKind("idle");
-    go({ page: null, lead: 0 });
+    if (pushedRef.current) {
+      // Undo our own history entry, so back and forward stay in step.
+      flushAll();
+      pushedRef.current = false;
+      urlRef.current = { ...urlRef.current, page: null, lead: null };
+      router.back();
+    } else go({ page: null, lead: 0 });
   };
 
   /** On opening a page: give it an empty block if it has none, so there's
@@ -1160,7 +1187,7 @@ export default function Tasks() {
             type="button"
             className={styles.navBtn}
             aria-label="Previous day"
-            onClick={() => go({ day: toISODate(addDays(fromISODate(day), -1)) })}
+            onClick={() => goDay(toISODate(addDays(fromISODate(day), -1)))}
           >
             ‹
           </button>
@@ -1173,7 +1200,7 @@ export default function Tasks() {
               type="date"
               className={styles.dateInput}
               value={day}
-              onChange={(e) => e.target.value && go({ day: e.target.value })}
+              onChange={(e) => e.target.value && goDay(e.target.value)}
               aria-label="Pick a day"
             />
           </div>
@@ -1181,29 +1208,31 @@ export default function Tasks() {
             type="button"
             className={styles.navBtn}
             aria-label="Next day"
-            onClick={() => go({ day: toISODate(addDays(fromISODate(day), 1)) })}
+            onClick={() => goDay(toISODate(addDays(fromISODate(day), 1)))}
           >
             ›
           </button>
         </div>
         {!isToday && today && (
-          <button type="button" className={styles.todayBtn} onClick={() => go({ day: today })}>
+          <button type="button" className={styles.todayBtn} onClick={() => goDay(today)}>
             ↩ Back to today
           </button>
         )}
 
         {banner && <div className={styles.banner}>{banner}</div>}
 
-        <Section
-          title={isToday ? "Today’s pages" : "Pages"}
-          items={dated}
-          openId={lead > 0 && pageId ? prepId(pageId, lead) : pageId}
-          empty={lists.day === day || dayCache[day] ? "Nothing planned for this day." : ""}
-          onAdd={() => setNewFor({ day })}
-          onOpen={(id, l) => go({ page: id, lead: l ?? 0 })}
-          onMove={movePageById}
-          onDelete={deletePageById}
-        />
+        <div key={day} className={dayDir > 0 ? styles.dayFromRight : styles.dayFromLeft}>
+          <Section
+            title={isToday ? "Today’s pages" : "Pages"}
+            items={dated}
+            openId={lead > 0 && pageId ? prepId(pageId, lead) : pageId}
+            empty={lists.day === day || dayCache[day] ? "Nothing planned for this day." : ""}
+            onAdd={() => setNewFor({ day })}
+            onOpen={(id, l) => go({ page: id, lead: l ?? 0 })}
+            onMove={movePageById}
+            onDelete={deletePageById}
+          />
+        </div>
         <Section
           title="Ongoing"
           items={undated}

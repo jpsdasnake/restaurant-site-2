@@ -1776,6 +1776,38 @@ span.emojiBtn {
   font-size: 14px;
 }
 
+/* ---------- motion ---------- */
+
+/* A new day's list slides in from the side it came from. */
+.dayFromRight {
+  animation: fromRight 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.dayFromLeft {
+  animation: fromLeft 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+/* A page settles in when it opens. */
+.editor {
+  animation: settle 0.16s ease-out;
+}
+@keyframes fromRight {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+@keyframes fromLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+}
+@keyframes settle {
+  from {
+    opacity: 0.4;
+    transform: translateY(4px);
+  }
+}
+
 /* ---------- phones: one column, list ⇄ page ---------- */
 
 @media (max-width: 759px) {
@@ -1791,6 +1823,11 @@ span.emojiBtn {
   }
   .hasOpen .main {
     display: block;
+    animation: fromRight 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  /* Back to the list: it comes in from the left. */
+  .page:not(.hasOpen) .sidebar {
+    animation: fromLeft 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
   }
   .backBtn {
     display: inline-block;
@@ -1851,5 +1888,13 @@ span.emojiBtn {
   }
   .newTitle {
     font-size: 18px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page *,
+  .newView {
+    animation: none !important;
+    transition: none !important;
   }
 }
