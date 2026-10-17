@@ -28,6 +28,7 @@ import Editor, { type EditorActions, type Focus } from "./Editor";
 import NewPageView from "./NewPageView";
 import PageMenu from "./PageMenu";
 import type { PickTarget } from "./PagePicker";
+import useWakeLock from "./useWakeLock";
 import styles from "./tasks.module.css";
 
 const POLL_MS = 5000;
@@ -654,6 +655,8 @@ export default function Tasks() {
       cancelled = true;
     };
   }, [pageId]);
+
+  useWakeLock(Boolean(pageId));
 
   // Keep the snapshot current (a second after things settle).
   useEffect(() => {
