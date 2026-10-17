@@ -180,6 +180,8 @@ export default function Tasks() {
    *  fresh one loads. Kept current with local edits through setOpen. */
   const [initialPages] = useState(() => new Map(snapshot?.pages ?? []));
   const pageCache = useRef(initialPages);
+  /** Pages fetched from the server this session; the rest of the cache came from the snapshot. */
+  const fetchedRef = useRef(new Set<string>());
   const setOpen = (next: OpenPage | null) => {
     openRef.current = next;
     if (next && !next.virtual) {
@@ -491,14 +493,16 @@ export default function Tasks() {
     const ids = new Set<string>();
     for (const p of items) {
       const id = p.virtual ? p.virtual.templateId : p.prep ? null : p.id;
-      if (id && !pageCache.current.has(id)) ids.add(id);
+      if (id && !fetchedRef.current.has(id)) ids.add(id);
     }
     if (!ids.size) return;
     store
       .getPages([...ids])
       .then((rows) => {
-        for (const r of rows)
+        for (const r of rows) {
+          fetchedRef.current.add(r.page.id);
           if (openRef.current?.page.id !== r.page.id) pageCache.current.set(r.page.id, r);
+        }
       })
       .catch(() => {}); // only a head start; opening a page fetches it anyway
   }, []);
@@ -636,6 +640,7 @@ export default function Tasks() {
           setOpenStateKind("missing");
           return;
         }
+        fetchedRef.current.add(pageId);
         // Already showing the cached copy: take the server's, unless edits are on their way.
         if (openRef.current?.page.id === pageId) {
           if (inflightRef.current > 0 || hasPending()) return;
@@ -742,7 +747,10 @@ export default function Tasks() {
           : id;
       if (key && wroteRecently(key)) return; // the echo of our own write
       const pageOf = c.table === "task_blocks" ? String(c.record.page_id ?? c.old.page_id ?? "") : id;
-      if (pageOf && pageOf !== openRef.current?.page.id) pageCache.current.delete(pageOf);
+      if (pageOf && pageOf !== openRef.current?.page.id) {
+        pageCache.current.delete(pageOf);
+        fetchedRef.current.delete(pageOf);
+      }
       const cur = openRef.current;
       const touchesOpen =
         !!cur &&
@@ -751,14 +759,16 @@ export default function Tasks() {
           (c.table === "task_pages" && cur.virtual?.templateId === id));
       syncSoon(touchesOpen);
     };
+    let dropped = false;
     const onLive = (live: boolean) => {
       if (!live) {
+        if (liveRef.current !== "off") dropped = true;
         liveRef.current = "off";
         return;
       }
       if (liveRef.current === "off") {
         liveRef.current = "joined";
-        syncSoon(true); // catch up on anything missed while disconnected
+        if (dropped) syncSoon(true); // catch up on anything missed while disconnected
       }
     };
     return subscribeTasks(onChange, onLive);
