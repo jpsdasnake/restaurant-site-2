@@ -158,6 +158,22 @@ a plain WebSocket (still no supabase-js) and subscribes to
 - Ticking a box updates the sidebar's progress ring locally; several ticks
   share one list refresh.
 
+### Offline and start-up
+
+- **Snapshot.** The lists (days around today, Ongoing, templates) and the
+  80 most recently used pages are kept in `localStorage`
+  (`tasks-snapshot-v1`), so the app opens with them on screen and refreshes
+  behind. Offline it keeps showing them ("Offline — showing the last copy").
+- **Writes wait for the connection.** A write that gets no answer (fetch
+  throws) is retried in order with backoff, and at once on `online`, holding
+  the queue behind it; the status reads "Offline — changes kept, will sync".
+  Every step is safe to repeat: `createPage` is an upsert, and an "exists"
+  on our own repeat exception counts as success. The queue lives in memory:
+  edits made offline survive as long as the app stays open, not a restart.
+- **Service worker** (`public/sw.js`, registered in production only): build
+  files and task photos cache-first, pages network-first with a 3 s fallback
+  to the last copy. Supabase data is never cached there.
+
 ### Page cache and prefetch
 
 Every page the sidebar lists is fetched in one request (`getPages`) after the

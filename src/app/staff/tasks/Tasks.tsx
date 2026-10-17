@@ -9,6 +9,7 @@ import {
   bySidebarOrder,
   newId,
   positionBetween,
+  isNetworkError,
   store,
   wroteRecently,
   type Block,
@@ -104,6 +105,27 @@ function buildCopy(t: { page: Page; blocks: Block[] }, targetDay: string | null)
   return { page, blocks: copied.length ? copied : [emptyBlock(id)] };
 }
 
+/* What this device last saw, kept in localStorage so the app opens with
+   its lists and pages on screen at once (and offline), then refreshes. */
+const SNAPSHOT_KEY = "tasks-snapshot-v1";
+type Snapshot = {
+  days: Record<string, PageSummary[]>;
+  undated: PageSummary[];
+  templates: TemplateSummary[];
+  pages: [string, { page: Page; blocks: Block[] }][];
+};
+const readSnapshot = (): Snapshot | null => {
+  try {
+    const raw = typeof window === "undefined" ? null : localStorage.getItem(SNAPSHOT_KEY);
+    return raw ? (JSON.parse(raw) as Snapshot) : null;
+  } catch {
+    return null;
+  }
+};
+/** Days around today worth keeping, and how many pages. */
+const SNAPSHOT_DAYS = 7;
+const SNAPSHOT_PAGES = 80;
+
 const stripCreated = (page: Page) => {
   const { created_at: _c, ...rest } = page;
   void _c;
@@ -125,11 +147,17 @@ export default function Tasks() {
 
   // Sidebar lists, tagged with the day they were loaded for so a day change
   // never shows the previous day's pages while the new ones load.
-  const [lists, setLists] = useState<Lists>({ day: "", dated: [], undated: [], templates: [] });
+  const [snapshot] = useState(readSnapshot);
+  const [lists, setLists] = useState<Lists>(() => ({
+    day: "",
+    dated: [],
+    undated: snapshot?.undated ?? [],
+    templates: snapshot?.templates ?? [],
+  }));
   /** The full-screen "+" view, and the day its new page is for (null = Ongoing). */
   const [newFor, setNewFor] = useState<{ day: string | null } | null>(null);
   // Lists already built for other days (visited or prefetched), shown at once on a day change.
-  const [dayCache, setDayCache] = useState<Record<string, PageSummary[]>>({});
+  const [dayCache, setDayCache] = useState<Record<string, PageSummary[]>>(() => snapshot?.days ?? {});
   const dated = lists.day === day ? lists.dated : (dayCache[day] ?? []);
   const undated = lists.undated;
   const [open, setOpenState] = useState<OpenPage | null>(null);
@@ -150,10 +178,14 @@ export default function Tasks() {
   const openRef = useRef<OpenPage | null>(null);
   /** Pages we've loaded, by id: opening one shows this copy at once while a
    *  fresh one loads. Kept current with local edits through setOpen. */
-  const pageCache = useRef(new Map<string, { page: Page; blocks: Block[] }>());
+  const [initialPages] = useState(() => new Map(snapshot?.pages ?? []));
+  const pageCache = useRef(initialPages);
   const setOpen = (next: OpenPage | null) => {
     openRef.current = next;
-    if (next && !next.virtual) pageCache.current.set(next.page.id, { page: next.page, blocks: next.blocks });
+    if (next && !next.virtual) {
+      pageCache.current.delete(next.page.id); // most recent last, for trimming the snapshot
+      pageCache.current.set(next.page.id, { page: next.page, blocks: next.blocks });
+    }
     setOpenState(next);
   };
   const focusedBlockRef = useRef<string | null>(null);
@@ -177,11 +209,37 @@ export default function Tasks() {
   const chainRef = useRef<Promise<void>>(Promise.resolve());
   const inflightRef = useRef(0);
   const [saving, setSaving] = useState(false);
+  /** Writes are waiting for the connection to come back. */
+  const [offline, setOffline] = useState(false);
   const enqueue = useCallback((work: () => Promise<void>) => {
     inflightRef.current += 1;
     setSaving(true);
+    // A write that never reached the server is retried (in order, holding up
+    // the ones behind it) until it does: edits made offline are kept, not dropped.
+    // Every step is safe to repeat: upserts, PATCHes and deletes by id.
+    const withRetry = async () => {
+      for (let wait = 2000; ; wait = Math.min(wait * 2, 30_000)) {
+        try {
+          await work();
+          setOffline(false);
+          return;
+        } catch (e) {
+          if (!isNetworkError(e)) throw e;
+          setOffline(true);
+          await new Promise<void>((resolve) => {
+            const done = () => {
+              clearTimeout(t);
+              window.removeEventListener("online", done);
+              resolve();
+            };
+            const t = setTimeout(done, wait);
+            window.addEventListener("online", done);
+          });
+        }
+      }
+    };
     chainRef.current = chainRef.current
-      .then(work)
+      .then(withRetry)
       .catch((e) => {
         console.error(e);
         setStatus({ kind: "err", msg: "Save failed — check the connection" });
@@ -475,6 +533,11 @@ export default function Tasks() {
       setStatus((s) => (quiet && s.kind !== "err" ? s : { kind: "ok", msg: "Synced" }));
     } catch (e) {
       console.error(e);
+      if (isNetworkError(e)) {
+        // No connection: the lists on screen are the last ones we saw.
+        setStatus({ kind: "err", msg: "Offline — showing the last copy" });
+        return;
+      }
       setStatus({ kind: "err", msg: "Can’t reach Supabase" });
       if (!quiet)
         setBanner(
@@ -586,6 +649,27 @@ export default function Tasks() {
       cancelled = true;
     };
   }, [pageId]);
+
+  // Keep the snapshot current (a second after things settle).
+  useEffect(() => {
+    if (!SHARED) return;
+    const t = setTimeout(() => {
+      const near = (d: string) =>
+        Math.abs(fromISODate(d).getTime() - fromISODate(today).getTime()) <= SNAPSHOT_DAYS * 86400000;
+      const snap: Snapshot = {
+        days: Object.fromEntries(Object.entries(dayCache).filter(([d]) => near(d))),
+        undated: lists.undated,
+        templates: lists.templates,
+        pages: [...pageCache.current].slice(-SNAPSHOT_PAGES),
+      };
+      try {
+        localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(snap));
+      } catch {
+        // full or blocked storage: the app just starts from the network
+      }
+    }, 1000);
+    return () => clearTimeout(t);
+  }, [lists, dayCache, open, today]);
 
   // The page shown is whatever we hold, as long as the URL still points at it.
   const shown =
@@ -882,9 +966,10 @@ export default function Tasks() {
     enqueue(async () => {
       await store.createPage(stripCreated(page), blocks);
       const res = await store.addException(templateId, occDay, page.id);
-      if (res === "exists") {
+      const ex = res === "exists" ? await store.getException(templateId, occDay) : null;
+      // "exists" with our own page means a retried write had already landed.
+      if (ex && ex.page_id !== page.id) {
         // Another device started this occurrence first: keep theirs, drop ours.
-        const ex = await store.getException(templateId, occDay);
         await store.deletePage(page.id);
         setStatus({ kind: "err", msg: "Someone else started this page first — showing theirs" });
         if (openRef.current?.page.id === page.id) {
@@ -1236,8 +1321,9 @@ export default function Tasks() {
           const copy = buildCopy(t, target.virtual.day);
           await store.createPage(stripCreated(copy.page), copy.blocks);
           const res = await store.addException(target.virtual.templateId, target.virtual.day, copy.page.id);
-          if (res === "exists") {
-            const ex = await store.getException(target.virtual.templateId, target.virtual.day);
+          const ex =
+            res === "exists" ? await store.getException(target.virtual.templateId, target.virtual.day) : null;
+          if (ex && ex.page_id !== copy.page.id) {
             await store.deletePage(copy.page.id);
             if (!ex?.page_id) throw new Error("That occurrence was skipped meanwhile");
             pageId = ex.page_id;
@@ -1305,9 +1391,15 @@ export default function Tasks() {
     );
 
   const isToday = day === today;
-  const statusText = saving ? "Saving…" : status.msg;
+  const statusText = offline ? "Offline — changes kept, will sync" : saving ? "Saving…" : status.msg;
   const dotClass =
-    status.kind === "err" ? styles.dotErr : saving ? styles.dotBusy : status.kind === "ok" ? styles.dotOk : "";
+    status.kind === "err" || offline
+      ? styles.dotErr
+      : saving
+        ? styles.dotBusy
+        : status.kind === "ok"
+          ? styles.dotOk
+          : "";
 
   return (
     <div className={`${styles.page} ${pageId ? styles.hasOpen : ""}`}>
