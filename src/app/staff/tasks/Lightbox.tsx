@@ -54,9 +54,7 @@ export default function Lightbox({ images, index, onIndex, onClose, onRemove, on
         <button
           type="button"
           className={styles.lbDanger}
-          onClick={() => {
-            if (confirm("Remove this photo from the block?")) onRemove(img);
-          }}
+          onClick={() => onRemove(img)}
         >
           Remove
         </button>

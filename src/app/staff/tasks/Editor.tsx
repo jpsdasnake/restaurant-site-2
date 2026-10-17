@@ -466,7 +466,6 @@ export default function Editor({
             className={styles.selDanger}
             disabled={!selected.size}
             onClick={() => {
-              if (!confirm(`Delete ${selected.size} block${selected.size === 1 ? "" : "s"}?`)) return;
               actions.deleteBlocks([...selected]);
               endSelect();
             }}

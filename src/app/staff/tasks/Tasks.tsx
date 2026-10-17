@@ -180,14 +180,44 @@ export default function Tasks() {
   const [status, setStatus] = useState<Status>({ kind: "", msg: "" });
   const [banner, setBanner] = useState<React.ReactNode>(null);
   const [focus, setFocus] = useState<Focus>(null);
-  /** Short confirmation after moving/copying blocks, with a link to the target. */
-  const [toast, setToast] = useState<{ msg: string; page?: string } | null>(null);
+  /** Short confirmation at the bottom: with an Open link after moving blocks,
+   *  or with Undo after deleting something. */
+  const [toast, setToast] = useState<{ msg: string; page?: string; undo?: () => void } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const showToast = (msg: string, page?: string) => {
-    setToast({ msg, page });
+  /** A deletion held back while its Undo is on screen; it runs when the toast goes. */
+  const pendingCommit = useRef<(() => void) | null>(null);
+  const commitPending = useCallback(() => {
+    const c = pendingCommit.current;
+    pendingCommit.current = null;
+    c?.();
+  }, []);
+  const showToast = (
+    msg: string,
+    opts: { page?: string; undo?: () => void; commit?: () => void } = {}
+  ) => {
+    commitPending(); // one Undo at a time: the previous one is now final
+    pendingCommit.current = opts.commit ?? null;
+    setToast({ msg, page: opts.page, undo: opts.undo });
     if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(null), 7000);
+    toastTimer.current = setTimeout(
+      () => {
+        setToast(null);
+        commitPending();
+      },
+      opts.undo ? 6000 : 7000
+    );
   };
+  const undoToast = () => {
+    const undo = toast?.undo;
+    pendingCommit.current = null;
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast(null);
+    undo?.();
+  };
+  /** Pages deleted or skipped while their Undo shows: kept out of refreshed lists. */
+  const hiddenRef = useRef(new Set<string>());
+  const visible = <T extends { id: string }>(l: T[]) => l.filter((p) => !hiddenRef.current.has(p.id));
+  const visibleRef = useRef(visible);
 
   /* ----- refs so callbacks always see the latest state ----- */
   const openRef = useRef<OpenPage | null>(null);
@@ -507,7 +537,7 @@ export default function Tasks() {
         todo_done: 0,
         virtual: { templateId: t.id, day: d },
       }));
-    return [...a, ...virtual, ...prep].sort(bySidebarOrder);
+    return visibleRef.current([...a, ...virtual, ...prep]).sort(bySidebarOrder);
   }, []);
 
   /** Fetch the pages behind a list that we don't hold yet (templates for
@@ -541,7 +571,12 @@ export default function Tasks() {
         store.listTemplates(),
       ]);
       if (dayRef.current !== d) return; // day changed while loading
-      setLists({ day: d, dated, undated, templates });
+      setLists({
+        day: d,
+        dated,
+        undated: visibleRef.current(undated),
+        templates: visibleRef.current(templates),
+      });
       setDayCache((c) => ({ ...c, [d]: dated }));
       prefetchPages([...dated, ...undated]);
       if (!quiet) {
@@ -721,18 +756,23 @@ export default function Tasks() {
       refreshOpen();
     };
     const interval = setInterval(tick, POLL_MS);
+    // Leaving the app: unsaved edits go now, and a deletion still showing Undo becomes final.
+    const leave = () => {
+      commitPending();
+      flushAll();
+    };
     const onVis = () => {
       if (document.visibilityState === "visible") tick();
-      else flushAll();
+      else leave();
     };
     document.addEventListener("visibilitychange", onVis);
-    window.addEventListener("pagehide", flushAll);
+    window.addEventListener("pagehide", leave);
     return () => {
       clearInterval(interval);
       document.removeEventListener("visibilitychange", onVis);
-      window.removeEventListener("pagehide", flushAll);
+      window.removeEventListener("pagehide", leave);
     };
-  }, [refreshLists, refreshOpen, flushAll]);
+  }, [refreshLists, refreshOpen, flushAll, commitPending]);
 
   // Live updates: another device's edit triggers a refetch within a moment.
   // "proven" once any change event has come through (our own echoes count),
@@ -1020,13 +1060,20 @@ export default function Tasks() {
 
   /** "Skip this day": the rule stops producing this occurrence. */
   const skipOccurrence = (templateId: string, occDay: string, key: string, label: string) => {
-    if (!confirm(`Skip “${label || "Untitled"}” for ${dateOf(occDay)}? It won’t come back on that day.`))
-      return;
+    hiddenRef.current.add(key);
     setLists((l) => ({ ...l, dated: l.dated.filter((p) => p.id !== key) }));
     if (openRef.current?.virtual?.key === key) closeOpen();
-    enqueue(async () => {
-      await store.addException(templateId, occDay, null);
-      await refreshLists();
+    showToast(`Skipped ${label || "Untitled"} for ${dateOf(occDay)}`, {
+      commit: () =>
+        enqueue(async () => {
+          await store.addException(templateId, occDay, null);
+          hiddenRef.current.delete(key);
+          await refreshLists();
+        }),
+      undo: () => {
+        hiddenRef.current.delete(key);
+        refreshLists();
+      },
     });
   };
 
@@ -1082,29 +1129,32 @@ export default function Tasks() {
       skipOccurrence(v.templateId, v.day, id, label);
       return;
     }
-    const msg = repeats
-      ? `Delete “${label || "Untitled"}”? Future repeats stop appearing; pages already started stay.`
-      : `Delete “${label || "Untitled"}”? This can’t be undone.`;
-    if (!confirm(msg)) return;
-    for (const b of openRef.current?.page.id === id ? openRef.current.blocks : []) {
-      const t = textTimers.current.get(b.id);
-      if (t) clearTimeout(t);
-      textTimers.current.delete(b.id);
-      pendingText.current.delete(b.id);
-    }
-    if (pendingPage.current?.id === id) pendingPage.current = null;
-    pageCache.current.delete(id);
+    // Nothing is deleted while Undo shows; its own edits are saved first, so Undo loses nothing.
+    flushAll();
+    hiddenRef.current.add(id);
     setLists((l) => ({
       ...l,
       dated: l.dated.filter((p) => p.id !== id),
       undated: l.undated.filter((p) => p.id !== id),
       templates: l.templates.filter((t) => t.id !== id),
     }));
-    enqueue(async () => {
-      await store.deletePage(id);
-      await refreshLists();
+    const wasOpen = openRef.current?.page.id === id;
+    if (wasOpen) closeOpen();
+    const name = label || "Untitled";
+    showToast(repeats ? `Deleted ${name} · its repeats stop` : `Deleted ${name}`, {
+      commit: () =>
+        enqueue(async () => {
+          await store.deletePage(id);
+          pageCache.current.delete(id);
+          hiddenRef.current.delete(id);
+          await refreshLists();
+        }),
+      undo: () => {
+        hiddenRef.current.delete(id);
+        refreshLists();
+        if (wasOpen) go({ page: id, lead: 0 });
+      },
     });
-    if (openRef.current?.page.id === id) closeOpen();
   };
 
   /** Pages blocks can be sent to: this week's pages, untouched occurrences, Ongoing, Templates. */
@@ -1308,16 +1358,27 @@ export default function Tasks() {
     },
     deleteBlocks(ids) {
       ensureReal();
+      const cur = openRef.current;
+      if (!cur) return;
       for (const id of ids) {
         const t = textTimers.current.get(id);
         if (t) clearTimeout(t);
         textTimers.current.delete(id);
         pendingText.current.delete(id);
       }
+      const removed = cur.blocks.filter((b) => ids.includes(b.id)); // with their latest text
       commitBlocks((bs) => bs.filter((b) => !ids.includes(b.id)));
-      enqueue(async () => {
-        await store.deleteBlocks(ids);
-        await refreshLists();
+      enqueue(() => store.deleteBlocks(ids));
+      syncSoon(false);
+      const n = removed.length;
+      showToast(`Deleted ${n} block${n === 1 ? "" : "s"}`, {
+        undo: () => {
+          // Put them back where they were (same ids and positions).
+          if (openRef.current?.page.id === cur.page.id) commitBlocks((bs) => [...bs, ...removed]);
+          else pageCache.current.delete(cur.page.id);
+          enqueue(() => store.insertBlocks(removed));
+          syncSoon(false);
+        },
       });
     },
     transferBlocks(ids, target, mode) {
@@ -1380,7 +1441,9 @@ export default function Tasks() {
         await store.insertBlocks(rows); // upsert: a move rewrites the same ids under the new page
         pageCache.current.delete(pageId); // its cached copy lacks the new blocks
         await refreshLists();
-        showToast(`${mode === "move" ? "Moved" : "Copied"} ${n} block${n === 1 ? "" : "s"} to ${title || "Untitled"}`, pageId);
+        showToast(`${mode === "move" ? "Moved" : "Copied"} ${n} block${n === 1 ? "" : "s"} to ${title || "Untitled"}`, {
+          page: pageId,
+        });
       });
     },
     moveBlock(id, dir) {
@@ -1404,9 +1467,16 @@ export default function Tasks() {
       ensureReal();
       const b = openRef.current?.blocks.find((x) => x.id === id);
       if (!b) return;
-      const images = b.images.filter((i) => i.id !== imageId);
+      const before = b.images;
+      const images = before.filter((i) => i.id !== imageId);
       commitBlocks((bs) => bs.map((x) => (x.id === id ? { ...x, images } : x)));
       enqueue(() => store.updateBlock(id, { images }));
+      showToast("Photo removed", {
+        undo: () => {
+          commitBlocks((bs) => bs.map((x) => (x.id === id ? { ...x, images: before } : x)));
+          enqueue(() => store.updateBlock(id, { images: before }));
+        },
+      });
     },
   };
 
@@ -1539,23 +1609,29 @@ export default function Tasks() {
         </div>
       </aside>
 
+      {/* Outside <main>: on a phone the list is showing after a page is deleted. */}
+      {toast && (
+        <div className={styles.toast} role="status">
+          <span>{toast.msg}</span>
+          {toast.undo && (
+            <button type="button" className={styles.toastUndo} onClick={undoToast}>
+              Undo
+            </button>
+          )}
+          {toast.page && (
+            <button
+              type="button"
+              onClick={() => {
+                setToast(null);
+                go({ page: toast.page, lead: 0 });
+              }}
+            >
+              Open
+            </button>
+          )}
+        </div>
+      )}
       <main className={styles.main}>
-        {toast && (
-          <div className={styles.toast} role="status">
-            <span>{toast.msg}</span>
-            {toast.page && (
-              <button
-                type="button"
-                onClick={() => {
-                  setToast(null);
-                  go({ page: toast.page, lead: 0 });
-                }}
-              >
-                Open
-              </button>
-            )}
-          </div>
-        )}
         {shown ? (
           <Editor
             key={shown.page.id}

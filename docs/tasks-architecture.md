@@ -262,8 +262,13 @@ the cache and is fetched again on the next list load.
   original day, so nothing reappears there.
 - **Skip this day** on a virtual occurrence inserts `(template_id, D, null)`.
 - Changing the rule only affects untouched occurrences. Deleting a template
-  warns that future repeats stop; pages already started stay (their
-  `template_id` goes null via the FK).
+  says its repeats stop; pages already started stay (their `template_id`
+  goes null via the FK).
+- **No confirm dialogs.** Deleting a page or template and skipping an
+  occurrence happen on screen at once, with an Undo toast for 6 s; the
+  write waits until the toast goes (or the app is left), and the item stays
+  out of refreshed lists meanwhile. Deleted blocks (select mode) and removed
+  photos are written at once and Undo puts them back.
 
 ## Prep steps done days ahead (lead time)
 

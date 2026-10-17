@@ -1286,7 +1286,8 @@
   position: fixed;
   left: calc(var(--side-w) + 16px);
   bottom: 16px;
-  z-index: 40;
+  z-index: 300; /* above the photo viewer, whose Remove it can undo */
+  animation: toastIn 0.18s ease-out;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -1305,6 +1306,20 @@
   border-radius: 8px;
   padding: 6px 10px;
   font-size: 13px;
+}
+.toast .toastUndo {
+  border-color: transparent;
+  background: var(--on-accent);
+  color: var(--accent-fill);
+  font-weight: 650;
+  min-height: 36px;
+  padding: 0 14px;
+}
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
 }
 .pickerModal {
   max-width: 460px;
