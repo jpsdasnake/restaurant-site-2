@@ -235,6 +235,65 @@
   color: var(--ok);
   font-weight: 600;
 }
+/* Today: a started page that's past its time and unfinished. */
+.itemLate:not(.itemOn) {
+  background: var(--danger-bg);
+}
+.metaLate {
+  color: var(--danger);
+  font-weight: 650;
+}
+/* Today: the current time between the pages before and after it. */
+.nowLine {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 18px;
+  margin: 2px 0;
+  padding-left: 8px;
+  color: var(--danger);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  list-style: none;
+}
+.nowLine::after {
+  content: "";
+  flex: 1;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--danger);
+  opacity: 0.7;
+}
+.doneHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  margin-top: 4px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+}
+.doneHead:hover {
+  background: var(--hover);
+}
+.doneTick {
+  color: var(--ok);
+}
+.chev {
+  margin-left: auto;
+  font-size: 11px;
+}
+.doneList .itemTitle {
+  color: var(--muted);
+}
 .ring {
   flex: 0 0 auto;
   width: 20px;

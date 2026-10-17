@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -23,7 +23,7 @@ import {
 import { uploadImage } from "@/lib/tasks-images";
 import { subscribeTasks, type Change } from "@/lib/tasks-realtime";
 import { occursOn, parseVirtualId, virtualId } from "@/lib/tasks-repeat";
-import { addDays, fmtMin, fromISODate, toISODate, workDayISO } from "@/lib/time";
+import { DAY_START_HOUR, addDays, fmtMin, fromISODate, toISODate, workDayISO } from "@/lib/time";
 import Editor, { type EditorActions, type Focus } from "./Editor";
 import NewPageView from "./NewPageView";
 import PageMenu from "./PageMenu";
@@ -126,6 +126,23 @@ const readSnapshot = (): Snapshot | null => {
 /** Days around today worth keeping, and how many pages. */
 const SNAPSHOT_DAYS = 7;
 const SNAPSHOT_PAGES = 80;
+// Read once per load. Through useSyncExternalStore, so a server render (dev)
+// and the hydrating client both start without it and nothing mismatches.
+let snapshotRead: Snapshot | null | undefined;
+const loadSnapshot = () => (snapshotRead === undefined ? (snapshotRead = readSnapshot()) : snapshotRead);
+const noSubscribe = () => () => {};
+const noSnapshot = () => null;
+
+/* The time of day, for today's now line and late pages: refreshed every 30 s. */
+let clockNow = 0;
+const subscribeClock = (onChange: () => void) => {
+  const t = setInterval(() => {
+    clockNow = Date.now();
+    onChange();
+  }, 30_000);
+  return () => clearInterval(t);
+};
+const getClock = () => clockNow || (clockNow = Date.now());
 
 const stripCreated = (page: Page) => {
   const { created_at: _c, ...rest } = page;
@@ -148,19 +165,16 @@ export default function Tasks() {
 
   // Sidebar lists, tagged with the day they were loaded for so a day change
   // never shows the previous day's pages while the new ones load.
-  const [snapshot] = useState(readSnapshot);
-  const [lists, setLists] = useState<Lists>(() => ({
-    day: "",
-    dated: [],
-    undated: snapshot?.undated ?? [],
-    templates: snapshot?.templates ?? [],
-  }));
+  const snapshot = useSyncExternalStore(noSubscribe, loadSnapshot, noSnapshot);
+  const [lists, setLists] = useState<Lists>({ day: "", dated: [], undated: [], templates: [] });
   /** The full-screen "+" view, and the day its new page is for (null = Ongoing). */
   const [newFor, setNewFor] = useState<{ day: string | null } | null>(null);
   // Lists already built for other days (visited or prefetched), shown at once on a day change.
-  const [dayCache, setDayCache] = useState<Record<string, PageSummary[]>>(() => snapshot?.days ?? {});
-  const dated = lists.day === day ? lists.dated : (dayCache[day] ?? []);
-  const undated = lists.undated;
+  const [dayCache, setDayCache] = useState<Record<string, PageSummary[]>>({});
+  // Until the first load lands, what the snapshot remembers.
+  const dated = lists.day === day ? lists.dated : (dayCache[day] ?? snapshot?.days[day] ?? []);
+  const undated = lists.day ? lists.undated : (snapshot?.undated ?? []);
+  const templates = lists.day ? lists.templates : (snapshot?.templates ?? []);
   const [open, setOpenState] = useState<OpenPage | null>(null);
   const [openState, setOpenStateKind] = useState<"idle" | "missing">("idle");
   const [status, setStatus] = useState<Status>({ kind: "", msg: "" });
@@ -179,8 +193,16 @@ export default function Tasks() {
   const openRef = useRef<OpenPage | null>(null);
   /** Pages we've loaded, by id: opening one shows this copy at once while a
    *  fresh one loads. Kept current with local edits through setOpen. */
-  const [initialPages] = useState(() => new Map(snapshot?.pages ?? []));
-  const pageCache = useRef(initialPages);
+  const pageCache = useRef(new Map<string, { page: Page; blocks: Block[] }>());
+  /** A page from the cache, else from the snapshot (for the first open after launch). */
+  const cachedPage = (id: string) => {
+    const hit = pageCache.current.get(id);
+    if (hit) return hit;
+    const snap = loadSnapshot()?.pages.find(([k]) => k === id)?.[1];
+    if (snap) pageCache.current.set(id, snap);
+    return snap;
+  };
+  const cachedPageRef = useRef(cachedPage);
   /** Pages fetched from the server this session; the rest of the cache came from the snapshot. */
   const fetchedRef = useRef(new Set<string>());
   const setOpen = (next: OpenPage | null) => {
@@ -622,14 +644,14 @@ export default function Tasks() {
         }
         show({ ...buildCopy(t, v.day), virtual: { ...v, key: pageId } });
       };
-      const cached = pageCache.current.get(v.templateId);
+      const cached = cachedPageRef.current(v.templateId);
       if (cached) Promise.resolve(cached).then(fromTemplate);
       else store.getPage(v.templateId).then(fromTemplate).catch(fail);
       return () => {
         cancelled = true;
       };
     }
-    const cached = pageCache.current.get(pageId);
+    const cached = cachedPageRef.current(pageId);
     if (cached) Promise.resolve().then(() => !cancelled && show(cached));
     store
       .getPage(pageId)
@@ -658,9 +680,11 @@ export default function Tasks() {
 
   useWakeLock(Boolean(pageId));
 
+  const nowMs = useSyncExternalStore(subscribeClock, getClock, noSnapshot);
+
   // Keep the snapshot current (a second after things settle).
   useEffect(() => {
-    if (!SHARED) return;
+    if (!SHARED || !lists.day) return; // nothing loaded yet: keep the last snapshot
     const t = setTimeout(() => {
       const near = (d: string) =>
         Math.abs(fromISODate(d).getTime() - fromISODate(today).getTime()) <= SNAPSHOT_DAYS * 86400000;
@@ -1404,6 +1428,9 @@ export default function Tasks() {
     );
 
   const isToday = day === today;
+  // Minutes into the working day: past midnight counts on from 24:00.
+  const clock = nowMs === null ? null : new Date(nowMs);
+  const nowMin = clock && clock.getHours() * 60 + clock.getMinutes() + (clock.getHours() < DAY_START_HOUR ? 1440 : 0);
   const statusText = offline ? "Offline — changes kept, will sync" : saving ? "Saving…" : status.msg;
   const dotClass =
     status.kind === "err" || offline
@@ -1419,7 +1446,7 @@ export default function Tasks() {
       {newFor && (
         <NewPageView
           dayLabel={newFor.day === null ? null : newFor.day === today ? "today" : forDayLabel(newFor.day)}
-          templates={lists.templates}
+          templates={templates}
           onClose={() => setNewFor(null)}
           onBlank={() => {
             setNewFor(null);
@@ -1483,8 +1510,9 @@ export default function Tasks() {
           <Section
             title={isToday ? "Today’s pages" : "Pages"}
             items={dated}
+            nowMin={isToday ? nowMin : null}
             openId={lead > 0 && pageId ? prepId(pageId, lead) : pageId}
-            empty={lists.day === day || dayCache[day] ? "Nothing planned for this day." : ""}
+            empty={lists.day === day || dayCache[day] || snapshot?.days[day] ? "Nothing planned for this day." : ""}
             onAdd={() => setNewFor({ day })}
             onOpen={(id, l) => go({ page: id, lead: l ?? 0 })}
             onMove={movePageById}
@@ -1617,6 +1645,8 @@ type SectionProps = {
   items: PageSummary[];
   openId: string | null;
   empty: string;
+  /** Today only: minutes into the working day, for the now line, late pages and Done. */
+  nowMin?: number | null;
   onAdd: () => void;
   onOpen: (id: string, lead?: number) => void;
   onMove: (id: string, day: string | null) => void;
@@ -1626,16 +1656,128 @@ type SectionProps = {
 const forDayLabel = (iso: string) =>
   fromISODate(iso).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 
+const isFinished = (p: PageSummary) => p.todo_total > 0 && p.todo_done === p.todo_total;
+
 function Section({
   title,
   items,
   openId,
   empty,
+  nowMin = null,
   onAdd,
   onOpen,
   onMove,
   onDelete,
 }: SectionProps) {
+  const [showDone, setShowDone] = useState(false);
+  const timed = nowMin !== null;
+  // On today's list, finished pages fold away under Done and a line marks now.
+  const active = timed ? items.filter((p) => !isFinished(p)) : items;
+  const done = timed ? items.filter(isFinished) : [];
+  const nowAt = timed ? active.findIndex((p) => p.start_min === null || p.start_min > nowMin) : -1;
+  const doneOpen = showDone || done.some((p) => p.id === openId);
+
+  const row = (p: PageSummary) => {
+    const label = `${p.emoji} ${p.title}`.trim();
+    const late =
+      timed && p.start_min !== null && p.start_min < nowMin && p.todo_total > 0 && !isFinished(p);
+    if (p.prep) {
+      const { prep } = p;
+      return (
+        <li
+          key={p.id}
+          className={`${styles.item} ${styles.itemPrep} ${p.id === openId ? styles.itemOn : ""} ${
+            p.virtual ? styles.itemVirtual : ""
+          }`}
+        >
+          <button
+            type="button"
+            className={styles.itemMain}
+            onClick={() => onOpen(prep.open, prep.leadDays)}
+            title={`Prep for ${forDayLabel(prep.forDay)}'s ${p.title || "Untitled"}`}
+          >
+            <span className={styles.itemEmoji}>{p.emoji || "📄"}</span>
+            <span className={styles.itemBody}>
+              <span className={styles.itemTitle}>
+                {p.virtual && <span className={styles.virtIcon}>↻</span>}
+                {prep.label}
+              </span>
+              <span className={styles.itemMeta}>
+                <span>
+                  for {forDayLabel(prep.forDay)} · {p.title || "Untitled"}
+                </span>
+                {p.todo_total > 0 && (
+                  <span className={p.todo_done === p.todo_total ? styles.metaDone : ""}>
+                    {p.todo_done}/{p.todo_total}
+                  </span>
+                )}
+              </span>
+            </span>
+            <Ring done={p.todo_done} total={p.todo_total} />
+          </button>
+          <span className={styles.menuSpacer} />
+        </li>
+      );
+    }
+    return (
+      <li
+        key={p.id}
+        data-row
+        className={`${styles.item} ${p.id === openId ? styles.itemOn : ""} ${
+          p.virtual ? styles.itemVirtual : ""
+        } ${late ? styles.itemLate : ""}`}
+      >
+        <button
+          type="button"
+          className={styles.itemMain}
+          onClick={() => onOpen(p.id, 0)}
+          title={
+            late
+              ? "Started time has passed and it isn’t finished"
+              : p.virtual
+                ? "Repeats from a template — not started yet"
+                : undefined
+          }
+        >
+          <span className={styles.itemEmoji}>{p.emoji || "📄"}</span>
+          <span className={styles.itemBody}>
+            <span className={`${styles.itemTitle} ${p.title ? "" : styles.untitled}`}>
+              {p.virtual && <span className={styles.virtIcon}>↻</span>}
+              {p.title || "Untitled"}
+            </span>
+            {(p.start_min !== null || p.todo_total > 0) && (
+              <span className={styles.itemMeta}>
+                {p.start_min !== null && (
+                  <span className={late ? styles.metaLate : ""}>{fmtMin(p.start_min)}</span>
+                )}
+                {p.todo_total > 0 && (
+                  <span className={p.todo_done === p.todo_total ? styles.metaDone : ""}>
+                    {p.todo_done}/{p.todo_total}
+                  </span>
+                )}
+              </span>
+            )}
+          </span>
+          <Ring done={p.todo_done} total={p.todo_total} />
+        </button>
+        <PageMenu
+          currentDay={p.day}
+          onMove={(d) => onMove(p.id, d)}
+          onDelete={() => onDelete(p.id, label)}
+          align="right"
+          label={`Menu for ${label || "Untitled"}`}
+          deleteLabel={p.virtual ? "Skip this day" : "Delete"}
+        />
+      </li>
+    );
+  };
+
+  const nowLine = timed && (
+    <li key="now" className={styles.nowLine} aria-label={`Now, ${fmtMin(nowMin % 1440)}`}>
+      <span>{fmtMin(nowMin % 1440)}</span>
+    </li>
+  );
+
   return (
     <section className={styles.section}>
       <header className={styles.sectionHead}>
@@ -1647,92 +1789,28 @@ function Section({
       {items.length === 0 ? (
         <p className={styles.empty}>{empty}</p>
       ) : (
-        <ul className={styles.list}>
-          {items.map((p) => {
-            const label = `${p.emoji} ${p.title}`.trim();
-            if (p.prep) {
-              const { prep } = p;
-              return (
-                <li
-                  key={p.id}
-                  className={`${styles.item} ${styles.itemPrep} ${p.id === openId ? styles.itemOn : ""} ${
-                    p.virtual ? styles.itemVirtual : ""
-                  }`}
-                >
-                  <button
-                    type="button"
-                    className={styles.itemMain}
-                    onClick={() => onOpen(prep.open, prep.leadDays)}
-                    title={`Prep for ${forDayLabel(prep.forDay)}'s ${p.title || "Untitled"}`}
-                  >
-                    <span className={styles.itemEmoji}>{p.emoji || "📄"}</span>
-                    <span className={styles.itemBody}>
-                      <span className={styles.itemTitle}>
-                        {p.virtual && <span className={styles.virtIcon}>↻</span>}
-                        {prep.label}
-                      </span>
-                      <span className={styles.itemMeta}>
-                        <span>
-                          for {forDayLabel(prep.forDay)} · {p.title || "Untitled"}
-                        </span>
-                        {p.todo_total > 0 && (
-                          <span className={p.todo_done === p.todo_total ? styles.metaDone : ""}>
-                            {p.todo_done}/{p.todo_total}
-                          </span>
-                        )}
-                      </span>
-                    </span>
-                    <Ring done={p.todo_done} total={p.todo_total} />
-                  </button>
-                  <span className={styles.menuSpacer} />
-                </li>
-              );
-            }
-            return (
-              <li
-                key={p.id}
-                data-row
-                className={`${styles.item} ${p.id === openId ? styles.itemOn : ""} ${
-                  p.virtual ? styles.itemVirtual : ""
-                }`}
+        <>
+          <ul className={styles.list}>
+            {active.map((p, i) => (i === nowAt ? [nowLine, row(p)] : row(p)))}
+            {active.length > 0 && nowAt === -1 && nowLine}
+          </ul>
+          {done.length > 0 && (
+            <>
+              <button
+                type="button"
+                className={styles.doneHead}
+                aria-expanded={doneOpen}
+                onClick={() => setShowDone(!doneOpen)}
               >
-                <button
-                  type="button"
-                  className={styles.itemMain}
-                  onClick={() => onOpen(p.id, 0)}
-                  title={p.virtual ? "Repeats from a template — not started yet" : undefined}
-                >
-                  <span className={styles.itemEmoji}>{p.emoji || "📄"}</span>
-                  <span className={styles.itemBody}>
-                    <span className={`${styles.itemTitle} ${p.title ? "" : styles.untitled}`}>
-                      {p.virtual && <span className={styles.virtIcon}>↻</span>}
-                      {p.title || "Untitled"}
-                    </span>
-                    {(p.start_min !== null || p.todo_total > 0) && (
-                      <span className={styles.itemMeta}>
-                        {p.start_min !== null && <span>{fmtMin(p.start_min)}</span>}
-                        {p.todo_total > 0 && (
-                          <span className={p.todo_done === p.todo_total ? styles.metaDone : ""}>
-                            {p.todo_done}/{p.todo_total}
-                          </span>
-                        )}
-                      </span>
-                    )}
-                  </span>
-                  <Ring done={p.todo_done} total={p.todo_total} />
-                </button>
-                <PageMenu
-                  currentDay={p.day}
-                  onMove={(d) => onMove(p.id, d)}
-                  onDelete={() => onDelete(p.id, label)}
-                  align="right"
-                  label={`Menu for ${label || "Untitled"}`}
-                  deleteLabel={p.virtual ? "Skip this day" : "Delete"}
-                />
-              </li>
-            );
-          })}
-        </ul>
+                <span className={styles.doneTick}>✓</span> Done · {done.length}
+                <span className={styles.chev} aria-hidden>
+                  {doneOpen ? "▾" : "▸"}
+                </span>
+              </button>
+              {doneOpen && <ul className={`${styles.list} ${styles.doneList}`}>{done.map(row)}</ul>}
+            </>
+          )}
+        </>
       )}
     </section>
   );
