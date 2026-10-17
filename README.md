@@ -88,6 +88,9 @@ from `/admin/preferences` each week.
    `alter table task_pages add column recipe_scale double precision not null default 1;`
    and, for prep steps done days ahead,
    `alter table task_blocks add column lead_days integer not null default 0;`)
+   Installs from before "who ticked it": run the two `alter table task_blocks
+   add column if not exists done_by / done_at` lines near the end of
+   `tasks.sql` (until then ticks still work, just without names).
    Installs from before live updates: run the last block of `tasks.sql`
    (the `supabase_realtime` publication) once, so devices see each other's
    edits at once instead of on the next poll.

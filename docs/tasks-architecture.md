@@ -168,6 +168,19 @@ arrow keys) move between steps; "Done · next" ticks a checklist step on the
 page itself. It opens at the first unticked step. Pages get ×½ ×1 ×2 ×3
 buttons, which set `recipe_scale` like rebasing on a row does.
 
+### Who ticked it
+
+- `task_blocks.done_by` (text, "" = unknown) and `done_at` (timestamptz)
+  are set on ticking and cleared on unticking; copies from templates start
+  clear, moved blocks keep theirs. A done item shows "Sam · 10:42" (or
+  "Fri 10:42" on another day) faintly at its right.
+- There's no login: the tablet asks "Who's on?" on the first tick of a shift
+  (`WhoPicker.tsx`), suggesting the people on today's schedule and recent
+  names, and remembers the answer for 10 hours (`who.ts`, localStorage).
+  "Not now" stops asking until a reload; the footer chip changes it any time.
+- Installs without the two columns keep working: the first write the server
+  rejects for them is retried without, and later writes leave them out.
+
 ### Kitchen timers
 
 - A step that mentions a time ("rest 30 min", "1 h 15 min", "20–25

@@ -29,6 +29,8 @@ import NewPageView from "./NewPageView";
 import PageMenu from "./PageMenu";
 import type { PickTarget } from "./PagePicker";
 import TimerBar from "./TimerBar";
+import WhoPicker from "./WhoPicker";
+import { currentName, useWho } from "./who";
 import { useTimers } from "./timers";
 import useWakeLock from "./useWakeLock";
 import styles from "./tasks.module.css";
@@ -72,6 +74,8 @@ const emptyBlock = (pageId: string, lead = 0): Block => ({
   done: false,
   images: [],
   lead_days: lead,
+  done_by: "",
+  done_at: null,
 });
 
 /** How far ahead the sidebar looks for prep steps. */
@@ -104,7 +108,14 @@ function buildCopy(t: { page: Page; blocks: Block[] }, targetDay: string | null)
     repeat: null,
     created_at: new Date().toISOString(),
   };
-  const copied = t.blocks.map((b) => ({ ...b, id: newId(), page_id: id, done: false }));
+  const copied = t.blocks.map((b) => ({
+    ...b,
+    id: newId(),
+    page_id: id,
+    done: false,
+    done_by: "",
+    done_at: null,
+  }));
   return { page, blocks: copied.length ? copied : [emptyBlock(id)] };
 }
 
@@ -717,6 +728,10 @@ export default function Tasks() {
 
   useWakeLock(Boolean(pageId));
   const timers = useTimers();
+  const who = useWho();
+  /** The "Who's on?" picker; `blockId` is a tick waiting for a name. */
+  const [askWho, setAskWho] = useState<{ blockId?: string } | null>(null);
+  const declinedWho = useRef(false);
 
   const nowMs = useSyncExternalStore(subscribeClock, getClock, noSnapshot);
 
@@ -1241,9 +1256,14 @@ export default function Tasks() {
     },
     toggleDone(id, done) {
       ensureReal();
-      commitBlocks((bs) => bs.map((b) => (b.id === id ? { ...b, done } : b)));
+      // Who and when, for "Sam · 10:42" beside the item.
+      const name = done ? currentName() : "";
+      const mark = { done, done_by: name, done_at: done ? new Date().toISOString() : null };
+      commitBlocks((bs) => bs.map((b) => (b.id === id ? { ...b, ...mark } : b)));
       if (done) navigator.vibrate?.(8); // a light tick on Android; ignored elsewhere
-      enqueue(() => store.updateBlock(id, { done }));
+      enqueue(() => store.updateBlock(id, mark));
+      // First tick of the shift: ask who's on (once; "Not now" holds until reload).
+      if (done && !name && !declinedWho.current) setAskWho({ blockId: id });
       syncSoon(false); // prep entries and the like; several ticks share one refresh
     },
     insertAfter(afterId, kind, text, leadDays) {
@@ -1263,6 +1283,8 @@ export default function Tasks() {
         done: false,
         images: [],
         lead_days: leadDays ?? (idx >= 0 ? (blocks[idx]?.lead_days ?? 0) : 0),
+        done_by: "",
+        done_at: null,
       };
       if (afterId) flushBlock(afterId); // the split left new text in the block above
       commitBlocks((bs) => [...bs, block]);
@@ -1616,11 +1638,32 @@ export default function Tasks() {
             <span className={`${styles.dot} ${dotClass}`} />
             {statusText}
           </span>
+          <button type="button" className={styles.whoChip} onClick={() => setAskWho({})} title="Who’s on this tablet">
+            👤 {(who.name && currentName()) || "Who’s on?"}
+          </button>
           <Link href="/">Staff tools</Link>
         </div>
       </aside>
 
       <TimerBar onOpen={(id) => go({ page: id, lead: 0 })} />
+      {askWho && (
+        <WhoPicker
+          onDone={(name) => {
+            const blockId = askWho.blockId;
+            setAskWho(null);
+            if (!name) {
+              declinedWho.current = true;
+              return;
+            }
+            // The tick that prompted the question gets the name too.
+            const b = blockId ? openRef.current?.blocks.find((x) => x.id === blockId) : null;
+            if (b?.done && !b.done_by) {
+              commitBlocks((bs) => bs.map((x) => (x.id === b.id ? { ...x, done_by: name } : x)));
+              enqueue(() => store.updateBlock(b.id, { done_by: name }));
+            }
+          }}
+        />
+      )}
       {/* Outside <main>: on a phone the list is showing after a page is deleted. */}
       {toast && (
         <div className={styles.toast} role="status">

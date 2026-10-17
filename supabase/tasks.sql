@@ -27,6 +27,8 @@ create table if not exists task_blocks (
   done       boolean not null default false,
   images     jsonb not null default '[]',
   lead_days  integer not null default 0,        -- N = do this N days before the page's day
+  done_by    text not null default '',         -- who ticked it (the name given on the tablet)
+  done_at    timestamptz,                      -- when; null when not done
   updated_at timestamptz not null default now()
 );
 create index if not exists task_blocks_page_pos on task_blocks (page_id, position);
@@ -70,6 +72,10 @@ create policy "public read"   on task_repeat_exceptions for select using (true);
 create policy "public write"  on task_repeat_exceptions for insert with check (true);
 create policy "public update" on task_repeat_exceptions for update using (true);
 create policy "public delete" on task_repeat_exceptions for delete using (true);
+
+-- Who ticked what (added later; safe to run again on an older install).
+alter table task_blocks add column if not exists done_by text not null default '';
+alter table task_blocks add column if not exists done_at timestamptz;
 
 -- Live updates: devices hear about each other's edits at once (Supabase
 -- Realtime). Safe to run again; without it the app falls back to polling.

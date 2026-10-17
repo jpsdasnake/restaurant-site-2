@@ -48,6 +48,9 @@ export type Block = {
   images: ImageRef[];
   /** 0 = on the page's day; N = N days before (prep such as soaking beans). */
   lead_days: number;
+  /** Who ticked it ("" = unknown) and when; cleared on unticking. */
+  done_by: string;
+  done_at: string | null;
 };
 
 /** What the sidebar needs for one page: identity plus checklist progress. */
@@ -91,7 +94,7 @@ export type PagePatch = Partial<
   Pick<Page, "day" | "title" | "emoji" | "start_min" | "recipe" | "recipe_scale" | "repeat">
 >;
 export type BlockPatch = Partial<
-  Pick<Block, "position" | "kind" | "text" | "done" | "images" | "lead_days">
+  Pick<Block, "position" | "kind" | "text" | "done" | "images" | "lead_days" | "done_by" | "done_at">
 >;
 
 /* ---------- helpers ---------- */
@@ -152,6 +155,8 @@ const normalizeBlock = (v: any): Block => ({
   done: Boolean(v.done),
   images: Array.isArray(v.images) ? v.images : [],
   lead_days: Math.max(0, Math.floor(Number(v.lead_days ?? 0) || 0)),
+  done_by: (v.done_by ?? "").toString(),
+  done_at: v.done_at ? String(v.done_at) : null,
 });
 
 const normalizeBrief = (v: any): BlockBrief => ({
@@ -203,6 +208,26 @@ const noteWrite = (...keys: string[]) => {
   if (written.size > 500) for (const [k, t] of written) if (now - t > ECHO_MS) written.delete(k);
 };
 export const wroteRecently = (key: string) => Date.now() - (written.get(key) ?? 0) < ECHO_MS;
+
+/* Who ticked what needs two columns added after the first release (see
+   tasks.sql). Until they exist, writes leave them out instead of failing. */
+let attribution = true;
+const ATTR = ["done_by", "done_at"] as const;
+const withoutAttr = <T extends object>(o: T): T => {
+  if (attribution) return o;
+  const c = { ...o } as Record<string, unknown>;
+  for (const k of ATTR) delete c[k];
+  return c as T;
+};
+/** Run a write; if the server doesn't know the attribution columns, drop them and retry once. */
+async function attrSafe(write: () => Promise<Response>) {
+  const r = await write();
+  if (r.ok || !attribution) return check(r);
+  const body = await r.text();
+  if (!/done_by|done_at/.test(body)) throw new Error(body.slice(0, 300));
+  attribution = false;
+  return check(await write());
+}
 
 /** fetch() rejects with a TypeError when the request never got an answer
  *  (offline, DNS, dropped connection); HTTP errors come through `check`. */
@@ -416,21 +441,23 @@ export const store: TasksStore = {
   },
   async insertBlocks(blocks) {
     noteWrite(...blocks.map((b) => b.id));
-    await check(
-      await fetch(blocksUrl, {
+    await attrSafe(() =>
+      fetch(blocksUrl, {
         method: "POST",
         headers: { ...headers, Prefer: "resolution=merge-duplicates,return=minimal" },
-        body: JSON.stringify(blocks),
+        body: JSON.stringify(blocks.map(withoutAttr)),
       })
     );
   },
   async updateBlock(id, patch) {
     noteWrite(id);
-    await check(
-      await fetch(`${blocksUrl}?id=eq.${encodeURIComponent(id)}`, {
+    const body = withoutAttr(patch);
+    if (!Object.keys(body).length) return;
+    await attrSafe(() =>
+      fetch(`${blocksUrl}?id=eq.${encodeURIComponent(id)}`, {
         method: "PATCH",
         headers: { ...headers, Prefer: "return=minimal" },
-        body: JSON.stringify(patch),
+        body: JSON.stringify(withoutAttr(patch)),
       })
     );
   },

@@ -85,6 +85,15 @@ function TimeChip({
   );
 }
 
+/** "10:42" today, "Fri 10:42" another day. */
+function doneTime(iso: string) {
+  const d = new Date(iso);
+  const hm = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  return d.toDateString() === new Date().toDateString()
+    ? hm
+    : `${d.toLocaleDateString("en-GB", { weekday: "short" })} ${hm}`;
+}
+
 /* ---------- types ---------- */
 
 export type Focus = { id: string; offset: number | "end" } | null;
@@ -967,6 +976,11 @@ function BlockRow({
           }, 150);
         }}
       />
+      {block.done && (block.done_by || block.done_at) && (
+        <span className={styles.doneBy} title={block.done_at ? new Date(block.done_at).toLocaleString("en-GB") : undefined}>
+          {[block.done_by, block.done_at && doneTime(block.done_at)].filter(Boolean).join(" · ")}
+        </span>
+      )}
       {!selecting && <StepTimers block={block} page={timerPage} onStart={actions.markStarted} />}
       <div className={`${styles.gripWrap} ${grip ? styles.gripOpen : ""}`} ref={gripRef}>
         <button
