@@ -15,6 +15,7 @@ import {
   type PagePatch,
   type BlockBrief,
   type PageSummary,
+  type RepeatingTemplate,
   type TemplateSummary,
 } from "@/lib/tasks-store";
 import { uploadImage } from "@/lib/tasks-images";
@@ -123,7 +124,9 @@ export default function Tasks() {
   const [lists, setLists] = useState<Lists>({ day: "", dated: [], undated: [], templates: [] });
   /** The full-screen "+" view, and the day its new page is for (null = Ongoing). */
   const [newFor, setNewFor] = useState<{ day: string | null } | null>(null);
-  const dated = lists.day === day ? lists.dated : [];
+  // Lists already built for other days (visited or prefetched), shown at once on a day change.
+  const [dayCache, setDayCache] = useState<Record<string, PageSummary[]>>({});
+  const dated = lists.day === day ? lists.dated : (dayCache[day] ?? []);
   const undated = lists.undated;
   const [open, setOpenState] = useState<OpenPage | null>(null);
   const [openState, setOpenStateKind] = useState<"idle" | "missing">("idle");
@@ -141,8 +144,12 @@ export default function Tasks() {
 
   /* ----- refs so callbacks always see the latest state ----- */
   const openRef = useRef<OpenPage | null>(null);
+  /** Pages we've loaded, by id: opening one shows this copy at once while a
+   *  fresh one loads. Kept current with local edits through setOpen. */
+  const pageCache = useRef(new Map<string, { page: Page; blocks: Block[] }>());
   const setOpen = (next: OpenPage | null) => {
     openRef.current = next;
+    if (next && !next.virtual) pageCache.current.set(next.page.id, { page: next.page, blocks: next.blocks });
     setOpenState(next);
   };
   const focusedBlockRef = useRef<string | null>(null);
@@ -236,90 +243,126 @@ export default function Tasks() {
   );
 
   /* ----- loading ----- */
+
+  /** The sidebar list for one day: its pages, untouched repeat occurrences and prep entries. */
+  const loadDay = useCallback(async (d: string, repeatingP: Promise<RepeatingTemplate[]>) => {
+    const dd = fromISODate(d);
+    const [a, upcoming, repeating] = await Promise.all([
+      store.listDay(d),
+      store.listUpcoming(toISODate(addDays(dd, 1)), toISODate(addDays(dd, MAX_LEAD_DAYS))),
+      repeatingP,
+    ]);
+    const daysAhead = (iso: string) =>
+      Math.round((fromISODate(iso).getTime() - dd.getTime()) / 86400000);
+    const prepSummary = (
+      open: string,
+      forDay: string,
+      base: Pick<PageSummary, "title" | "emoji" | "template_id" | "created_at">,
+      blocks: BlockBrief[],
+      virtual?: PageSummary["virtual"]
+    ): PageSummary | null => {
+      const n = daysAhead(forDay);
+      const mine = blocks.filter((x) => x.lead_days === n);
+      if (n < 1 || !mine.length) return null;
+      const todos = mine.filter((x) => x.kind === "todo");
+      return {
+        id: prepId(open, n),
+        day: d,
+        title: base.title,
+        emoji: base.emoji,
+        start_min: null,
+        template_id: base.template_id,
+        created_at: base.created_at,
+        todo_total: todos.length,
+        todo_done: virtual ? 0 : todos.filter((x) => x.done).length,
+        virtual,
+        prep: { forDay, leadDays: n, label: prepLabel(base.title, mine), open },
+      };
+    };
+    // Prep steps of pages in the coming days ("soak beans" the day before).
+    const prep: PageSummary[] = [];
+    for (const u of upcoming) {
+      if (!u.day) continue;
+      const ps = prepSummary(u.id, u.day, u, u.blocks);
+      if (ps) prep.push(ps);
+    }
+    // …and of repeat occurrences that haven't been started yet.
+    for (const t of repeating) {
+      for (let n = 1; n <= MAX_LEAD_DAYS; n++) {
+        const forDay = toISODate(addDays(dd, n));
+        if (!occursOn(t.repeat, forDay)) continue;
+        if (t.exceptions.some((e) => e.occurrence_day === forDay)) continue; // started or skipped
+        const ps = prepSummary(
+          virtualId(t.id, forDay),
+          forDay,
+          { ...t, template_id: t.id },
+          t.blocks,
+          { templateId: t.id, day: forDay }
+        );
+        if (ps) prep.push(ps);
+      }
+    }
+    // Occurrences the rules produce for this day, minus the ones already
+    // started (they're real pages in `a`) or skipped.
+    const virtual: PageSummary[] = repeating
+      .filter((t) => occursOn(t.repeat, d) && !t.exceptions.some((e) => e.occurrence_day === d))
+      .map((t) => ({
+        id: virtualId(t.id, d),
+        day: d,
+        title: t.title,
+        emoji: t.emoji,
+        start_min: t.start_min,
+        template_id: t.id,
+        created_at: t.created_at,
+        todo_total: t.todo_total,
+        todo_done: 0,
+        virtual: { templateId: t.id, day: d },
+      }));
+    return [...a, ...virtual, ...prep].sort(bySidebarOrder);
+  }, []);
+
+  /** Fetch the pages behind a list that we don't hold yet (templates for
+   *  untouched occurrences), in one request, so tapping one opens it at once. */
+  const prefetchPages = useCallback((items: PageSummary[]) => {
+    const ids = new Set<string>();
+    for (const p of items) {
+      const id = p.virtual ? p.virtual.templateId : p.prep ? null : p.id;
+      if (id && !pageCache.current.has(id)) ids.add(id);
+    }
+    if (!ids.size) return;
+    store
+      .getPages([...ids])
+      .then((rows) => {
+        for (const r of rows)
+          if (openRef.current?.page.id !== r.page.id) pageCache.current.set(r.page.id, r);
+      })
+      .catch(() => {}); // only a head start; opening a page fetches it anyway
+  }, []);
+
   const refreshLists = useCallback(async (quiet = true) => {
     const d = dayRef.current;
     try {
-      const dd = fromISODate(d);
-      const [a, b, repeating, templates, upcoming] = await Promise.all([
-        store.listDay(d),
+      // Templates with a rule are shared by this day and the prefetched neighbours.
+      const repeating = store.listRepeating();
+      const [dated, undated, templates] = await Promise.all([
+        loadDay(d, repeating),
         store.listUndated(),
-        store.listRepeating(),
         store.listTemplates(),
-        store.listUpcoming(toISODate(addDays(dd, 1)), toISODate(addDays(dd, MAX_LEAD_DAYS))),
       ]);
       if (dayRef.current !== d) return; // day changed while loading
-      const daysAhead = (iso: string) =>
-        Math.round((fromISODate(iso).getTime() - dd.getTime()) / 86400000);
-      const prepSummary = (
-        open: string,
-        forDay: string,
-        base: Pick<PageSummary, "title" | "emoji" | "template_id" | "created_at">,
-        blocks: BlockBrief[],
-        virtual?: PageSummary["virtual"]
-      ): PageSummary | null => {
-        const n = daysAhead(forDay);
-        const mine = blocks.filter((x) => x.lead_days === n);
-        if (n < 1 || !mine.length) return null;
-        const todos = mine.filter((x) => x.kind === "todo");
-        return {
-          id: prepId(open, n),
-          day: d,
-          title: base.title,
-          emoji: base.emoji,
-          start_min: null,
-          template_id: base.template_id,
-          created_at: base.created_at,
-          todo_total: todos.length,
-          todo_done: virtual ? 0 : todos.filter((x) => x.done).length,
-          virtual,
-          prep: { forDay, leadDays: n, label: prepLabel(base.title, mine), open },
-        };
-      };
-      // Prep steps of pages in the coming days ("soak beans" the day before).
-      const prep: PageSummary[] = [];
-      for (const u of upcoming) {
-        if (!u.day) continue;
-        const ps = prepSummary(u.id, u.day, u, u.blocks);
-        if (ps) prep.push(ps);
-      }
-      // …and of repeat occurrences that haven't been started yet.
-      for (const t of repeating) {
-        for (let n = 1; n <= MAX_LEAD_DAYS; n++) {
-          const forDay = toISODate(addDays(dd, n));
-          if (!occursOn(t.repeat, forDay)) continue;
-          if (t.exceptions.some((e) => e.occurrence_day === forDay)) continue; // started or skipped
-          const ps = prepSummary(
-            virtualId(t.id, forDay),
-            forDay,
-            { ...t, template_id: t.id },
-            t.blocks,
-            { templateId: t.id, day: forDay }
-          );
-          if (ps) prep.push(ps);
+      setLists({ day: d, dated, undated, templates });
+      setDayCache((c) => ({ ...c, [d]: dated }));
+      prefetchPages([...dated, ...undated]);
+      if (!quiet) {
+        // The days either side, so ‹ and › show their lists straight away.
+        const dd = fromISODate(d);
+        for (const n of [-1, 1]) {
+          const other = toISODate(addDays(dd, n));
+          loadDay(other, repeating)
+            .then((list) => setDayCache((c) => ({ ...c, [other]: list })))
+            .catch(() => {});
         }
       }
-      // Occurrences the rules produce for this day, minus the ones already
-      // started (they're real pages in `a`) or skipped.
-      const virtual: PageSummary[] = repeating
-        .filter((t) => occursOn(t.repeat, d) && !t.exceptions.some((e) => e.occurrence_day === d))
-        .map((t) => ({
-          id: virtualId(t.id, d),
-          day: d,
-          title: t.title,
-          emoji: t.emoji,
-          start_min: t.start_min,
-          template_id: t.id,
-          created_at: t.created_at,
-          todo_total: t.todo_total,
-          todo_done: 0,
-          virtual: { templateId: t.id, day: d },
-        }));
-      setLists({
-        day: d,
-        dated: [...a, ...virtual, ...prep].sort(bySidebarOrder),
-        undated: b,
-        templates,
-      });
       setBanner(null);
       // A quiet poll that succeeds also clears an earlier connection error.
       setStatus((s) => (quiet && s.kind !== "err" ? s : { kind: "ok", msg: "Synced" }));
@@ -336,7 +379,7 @@ export default function Tasks() {
           </>
         );
     }
-  }, []);
+  }, [loadDay, prefetchPages]);
 
   const refreshOpen = useCallback(async () => {
     const cur = openRef.current;
@@ -378,46 +421,59 @@ export default function Tasks() {
   const prepareStartRef = useRef<(o: OpenPage) => void>(() => {});
 
   // Open page follows the URL. A page we already hold (e.g. one just created)
-  // isn't refetched; the poll keeps it fresh.
+  // isn't refetched; the poll keeps it fresh. One in the cache is shown at
+  // once and then checked against the server.
   useEffect(() => {
     if (!SHARED || !pageId) return;
     if (openRef.current?.page.id === pageId || openRef.current?.virtual?.key === pageId) return;
     let cancelled = false;
     const v = parseVirtualId(pageId);
+    const show = (o: OpenPage) => {
+      setOpen(o);
+      setOpenStateKind("idle");
+      prepareStartRef.current(o);
+    };
+    const fail = (e: unknown) => {
+      console.error(e);
+      if (!cancelled) setOpenStateKind("missing");
+    };
     if (v) {
       // Show the template's content as this day's page; it becomes real on first edit.
-      store
-        .getPage(v.templateId)
-        .then((t) => {
-          if (cancelled) return;
-          if (!t || t.page.kind !== "template") {
-            setOpenStateKind("missing");
-            return;
-          }
-          const copy = { ...buildCopy(t, v.day), virtual: { ...v, key: pageId } };
-          setOpen(copy);
-          setOpenStateKind("idle");
-          prepareStartRef.current(copy);
-        })
-        .catch((e) => {
-          console.error(e);
-          if (!cancelled) setOpenStateKind("missing");
-        });
+      const fromTemplate = (t: { page: Page; blocks: Block[] } | null) => {
+        if (cancelled) return;
+        if (!t || t.page.kind !== "template") {
+          setOpenStateKind("missing");
+          return;
+        }
+        show({ ...buildCopy(t, v.day), virtual: { ...v, key: pageId } });
+      };
+      const cached = pageCache.current.get(v.templateId);
+      if (cached) Promise.resolve(cached).then(fromTemplate);
+      else store.getPage(v.templateId).then(fromTemplate).catch(fail);
       return () => {
         cancelled = true;
       };
     }
+    const cached = pageCache.current.get(pageId);
+    if (cached) Promise.resolve().then(() => !cancelled && show(cached));
     store
       .getPage(pageId)
       .then((res) => {
         if (cancelled) return;
-        setOpen(res);
-        setOpenStateKind(res ? "idle" : "missing");
-        if (res) prepareStartRef.current(res);
+        if (!res) {
+          pageCache.current.delete(pageId);
+          if (openRef.current?.page.id === pageId) setOpen(null);
+          setOpenStateKind("missing");
+          return;
+        }
+        // Already showing the cached copy: take the server's, unless edits are on their way.
+        if (openRef.current?.page.id === pageId) {
+          if (inflightRef.current > 0 || hasPending()) return;
+          setOpen({ page: res.page, blocks: res.blocks });
+        } else show(res);
       })
       .catch((e) => {
-        console.error(e);
-        if (!cancelled) setOpenStateKind("missing");
+        if (!cached) fail(e); // offline with a cached copy: keep showing it
       });
     return () => {
       cancelled = true;
@@ -689,6 +745,8 @@ export default function Tasks() {
     flushAll();
     const cur = openRef.current;
     if (cur?.page.id === id) setOpen({ ...cur, page: { ...cur.page, day: targetDay } });
+    const cached = pageCache.current.get(id);
+    if (cached) pageCache.current.set(id, { ...cached, page: { ...cached.page, day: targetDay } });
     // Show the result right away; the server confirms it after the write.
     const summary = [...lists.dated, ...lists.undated].find((p) => p.id === id);
     const moved = summary ? { ...summary, day: targetDay } : null;
@@ -726,6 +784,7 @@ export default function Tasks() {
       pendingText.current.delete(b.id);
     }
     if (pendingPage.current?.id === id) pendingPage.current = null;
+    pageCache.current.delete(id);
     setLists((l) => ({
       ...l,
       dated: l.dated.filter((p) => p.id !== id),
@@ -1016,6 +1075,7 @@ export default function Tasks() {
           done: target.isTemplate ? false : b.done, // templates start clean
         }));
         await store.insertBlocks(rows); // upsert: a move rewrites the same ids under the new page
+        pageCache.current.delete(pageId); // its cached copy lacks the new blocks
         await refreshLists();
         showToast(`${mode === "move" ? "Moved" : "Copied"} ${n} block${n === 1 ? "" : "s"} to ${title || "Untitled"}`, pageId);
       });
@@ -1138,7 +1198,7 @@ export default function Tasks() {
           title={isToday ? "Today’s pages" : "Pages"}
           items={dated}
           openId={lead > 0 && pageId ? prepId(pageId, lead) : pageId}
-          empty={lists.day === day ? "Nothing planned for this day." : ""}
+          empty={lists.day === day || dayCache[day] ? "Nothing planned for this day." : ""}
           onAdd={() => setNewFor({ day })}
           onOpen={(id, l) => go({ page: id, lead: l ?? 0 })}
           onMove={movePageById}
@@ -1198,7 +1258,7 @@ export default function Tasks() {
             loadTargets={loadTargets}
           />
         ) : pageId && openState !== "missing" ? (
-          <div className={styles.placeholder} />
+          <LoadingPage summary={[...dated, ...undated].find((p) => p.id === pageId)} />
         ) : pageId ? (
           <div className={styles.placeholder}>
             <p>That page doesn’t exist any more.</p>
@@ -1212,6 +1272,24 @@ export default function Tasks() {
           </div>
         )}
       </main>
+    </div>
+  );
+}
+
+/** While a page we don't hold yet loads: its name from the sidebar and faint lines. */
+function LoadingPage({ summary }: { summary?: PageSummary }) {
+  return (
+    <div className={styles.editor} aria-busy>
+      <div className={styles.editorTop} />
+      <div className={styles.titleRow}>
+        <span className={styles.emojiBtn}>{summary?.emoji}</span>
+        <span className={styles.titleInput}>{summary?.title}</span>
+      </div>
+      <div className={styles.skeleton}>
+        <span />
+        <span />
+        <span />
+      </div>
     </div>
   );
 }

@@ -1701,6 +1701,38 @@
   background: var(--accent-bg);
 }
 
+span.emojiBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 24px 4px;
+}
+.skeleton span {
+  height: 14px;
+  border-radius: 7px;
+  background: var(--track);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+.skeleton span:nth-child(1) {
+  width: 62%;
+}
+.skeleton span:nth-child(2) {
+  width: 48%;
+}
+.skeleton span:nth-child(3) {
+  width: 55%;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
 .placeholder {
   height: 100%;
   display: flex;

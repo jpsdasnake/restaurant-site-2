@@ -192,6 +192,10 @@ const headers = {
   "Content-Type": "application/json",
 };
 
+/** fetch() rejects with a TypeError when the request never got an answer
+ *  (offline, DNS, dropped connection); HTTP errors come through `check`. */
+export const isNetworkError = (e: unknown) => e instanceof TypeError;
+
 const check = async (r: Response) => {
   if (!r.ok) throw new Error((await r.text()).slice(0, 300));
   return r;
@@ -215,6 +219,8 @@ export interface TasksStore {
   /** Real pages with no day, in sidebar order. */
   listUndated(): Promise<PageSummary[]>;
   getPage(id: string): Promise<{ page: Page; blocks: Block[] } | null>;
+  /** Several pages with their blocks in one request (prefetching). */
+  getPages(ids: string[]): Promise<{ page: Page; blocks: Block[] }[]>;
   createPage(page: NewPage, blocks: Block[]): Promise<void>;
   updatePage(id: string, patch: PagePatch): Promise<void>;
   deletePage(id: string): Promise<void>;
@@ -352,11 +358,26 @@ export const store: TasksStore = {
     const blocks: unknown[] = Array.isArray(row.task_blocks) ? row.task_blocks : [];
     return { page: normalizePage(row), blocks: blocks.map(normalizeBlock).sort(byPosition) };
   },
+  async getPages(ids) {
+    if (!ids.length) return [];
+    const r = await check(
+      await fetch(
+        `${pagesUrl}?select=*,task_blocks(*)&id=in.(${ids.map(encodeURIComponent).join(",")})`,
+        { headers }
+      )
+    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return ((await r.json()) as any[]).map((row) => ({
+      page: normalizePage(row),
+      blocks: (Array.isArray(row.task_blocks) ? row.task_blocks : []).map(normalizeBlock).sort(byPosition),
+    }));
+  },
   async createPage(page, blocks) {
+    // An upsert, so a write retried after a dropped connection can't fail on its own row.
     await check(
       await fetch(pagesUrl, {
         method: "POST",
-        headers: { ...headers, Prefer: "return=minimal" },
+        headers: { ...headers, Prefer: "resolution=merge-duplicates,return=minimal" },
         body: JSON.stringify([page]),
       })
     );
