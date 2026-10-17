@@ -25,7 +25,8 @@ need schema changes between them.
 4. **Client-generated UUIDs** (`crypto.randomUUID()`), so the UI can insert
    optimistically and never waits on the server to know an id.
 5. **Sync = poll + focus refresh, like the schedule.** No new dependency.
-   Details below. Supabase Realtime is a later drop-in if polling feels slow.
+   Details below. Supabase Realtime now nudges devices on every change
+   (see "Live updates").
 6. **Same openness as the rest of the site**: anon key, wide-open RLS, no
    auth. Documented as a TODO like the other tables.
 
@@ -140,8 +141,30 @@ Every write is a plain PATCH/POST/DELETE on one row (bulk POST with
 transactions are needed; the only multi-step write that must not half-apply
 is materializing a repeat occurrence, handled below.
 
-Realtime later: Supabase's `postgres_changes` channel on the three tables
-would replace the poll with no schema change.
+### Live updates (Realtime)
+
+`src/lib/tasks-realtime.ts` speaks Supabase Realtime's Phoenix protocol over
+a plain WebSocket (still no supabase-js) and subscribes to
+`postgres_changes` on the three tables, which must be in the
+`supabase_realtime` publication (last block of `tasks.sql`).
+
+- An event is only a nudge: the app refetches the lists (and the open page
+  if the change touches it) 250 ms later, after its own queued writes.
+- Echoes of our own writes are ignored: the store remembers the rows it wrote
+  in the last few seconds (`wroteRecently`).
+- The 5 s poll stays until the first event proves events arrive; then it
+  runs only if nothing has synced for 60 s. A dropped socket reconnects with
+  backoff, at once on wake, and catches up with one refetch.
+- Ticking a box updates the sidebar's progress ring locally; several ticks
+  share one list refresh.
+
+### Page cache and prefetch
+
+Every page the sidebar lists is fetched in one request (`getPages`) after the
+list loads; templates of untouched occurrences too. Opening a cached page
+shows it at once and revalidates it; the lists for the days either side are
+built ahead on a day change. A changed page from another device drops out of
+the cache and is fetched again on the next list load.
 
 ## Templates (step 4)
 

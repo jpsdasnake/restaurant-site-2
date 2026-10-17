@@ -88,6 +88,9 @@ from `/admin/preferences` each week.
    `alter table task_pages add column recipe_scale double precision not null default 1;`
    and, for prep steps done days ahead,
    `alter table task_blocks add column lead_days integer not null default 0;`)
+   Installs from before live updates: run the last block of `tasks.sql`
+   (the `supabase_realtime` publication) once, so devices see each other's
+   edits at once instead of on the next poll.
 6. Photos on Tasks blocks live in a Storage bucket. Run
    [`supabase/task-images.sql`](supabase/task-images.sql) to create the
    public `task-images` bucket and its policies. Images are downsized in the

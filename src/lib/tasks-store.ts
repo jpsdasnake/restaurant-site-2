@@ -192,6 +192,18 @@ const headers = {
   "Content-Type": "application/json",
 };
 
+/* Rows this device wrote in the last few seconds, so live updates can tell
+   the echo of our own write from someone else's. Keyed by row id (or
+   "<template_id>|<day>" for repeat exceptions). */
+const written = new Map<string, number>();
+const ECHO_MS = 8000;
+const noteWrite = (...keys: string[]) => {
+  const now = Date.now();
+  for (const k of keys) written.set(k, now);
+  if (written.size > 500) for (const [k, t] of written) if (now - t > ECHO_MS) written.delete(k);
+};
+export const wroteRecently = (key: string) => Date.now() - (written.get(key) ?? 0) < ECHO_MS;
+
 /** fetch() rejects with a TypeError when the request never got an answer
  *  (offline, DNS, dropped connection); HTTP errors come through `check`. */
 export const isNetworkError = (e: unknown) => e instanceof TypeError;
@@ -318,6 +330,7 @@ export const store: TasksStore = {
     });
   },
   async addException(templateId, day, pageId) {
+    noteWrite(`${templateId}|${day}`);
     const r = await fetch(exceptionsUrl, {
       method: "POST",
       headers: { ...headers, Prefer: "return=minimal" },
@@ -373,6 +386,7 @@ export const store: TasksStore = {
     }));
   },
   async createPage(page, blocks) {
+    noteWrite(page.id);
     // An upsert, so a write retried after a dropped connection can't fail on its own row.
     await check(
       await fetch(pagesUrl, {
@@ -384,6 +398,7 @@ export const store: TasksStore = {
     if (blocks.length) await this.insertBlocks(blocks);
   },
   async updatePage(id, patch) {
+    noteWrite(id);
     await check(
       await fetch(`${pagesUrl}?id=eq.${encodeURIComponent(id)}`, {
         method: "PATCH",
@@ -393,12 +408,14 @@ export const store: TasksStore = {
     );
   },
   async deletePage(id) {
+    noteWrite(id);
     // Blocks go with it (on delete cascade).
     await check(
       await fetch(`${pagesUrl}?id=eq.${encodeURIComponent(id)}`, { method: "DELETE", headers })
     );
   },
   async insertBlocks(blocks) {
+    noteWrite(...blocks.map((b) => b.id));
     await check(
       await fetch(blocksUrl, {
         method: "POST",
@@ -408,6 +425,7 @@ export const store: TasksStore = {
     );
   },
   async updateBlock(id, patch) {
+    noteWrite(id);
     await check(
       await fetch(`${blocksUrl}?id=eq.${encodeURIComponent(id)}`, {
         method: "PATCH",
@@ -417,12 +435,14 @@ export const store: TasksStore = {
     );
   },
   async deleteBlock(id) {
+    noteWrite(id);
     await check(
       await fetch(`${blocksUrl}?id=eq.${encodeURIComponent(id)}`, { method: "DELETE", headers })
     );
   },
   async deleteBlocks(ids) {
     if (!ids.length) return;
+    noteWrite(...ids);
     await check(
       await fetch(`${blocksUrl}?id=in.(${ids.map(encodeURIComponent).join(",")})`, {
         method: "DELETE",

@@ -70,3 +70,18 @@ create policy "public read"   on task_repeat_exceptions for select using (true);
 create policy "public write"  on task_repeat_exceptions for insert with check (true);
 create policy "public update" on task_repeat_exceptions for update using (true);
 create policy "public delete" on task_repeat_exceptions for delete using (true);
+
+-- Live updates: devices hear about each other's edits at once (Supabase
+-- Realtime). Safe to run again; without it the app falls back to polling.
+do $$
+declare t text;
+begin
+  foreach t in array array['task_pages', 'task_blocks', 'task_repeat_exceptions'] loop
+    if not exists (
+      select 1 from pg_publication_tables
+      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t
+    ) then
+      execute format('alter publication supabase_realtime add table public.%I', t);
+    end if;
+  end loop;
+end $$;

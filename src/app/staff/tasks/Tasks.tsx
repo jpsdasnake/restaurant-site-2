@@ -10,6 +10,7 @@ import {
   newId,
   positionBetween,
   store,
+  wroteRecently,
   type Block,
   type Page,
   type PagePatch,
@@ -19,6 +20,7 @@ import {
   type TemplateSummary,
 } from "@/lib/tasks-store";
 import { uploadImage } from "@/lib/tasks-images";
+import { subscribeTasks, type Change } from "@/lib/tasks-realtime";
 import { occursOn, parseVirtualId, virtualId } from "@/lib/tasks-repeat";
 import { addDays, fmtMin, fromISODate, toISODate, workDayISO } from "@/lib/time";
 import Editor, { type EditorActions, type Focus } from "./Editor";
@@ -28,6 +30,8 @@ import type { PickTarget } from "./PagePicker";
 import styles from "./tasks.module.css";
 
 const POLL_MS = 5000;
+/** Once live updates are known to arrive, the poll is only a safety net. */
+const LIVE_POLL_MS = 60_000;
 const SAVE_DEBOUNCE_MS = 400;
 
 /** `virtual` = an occurrence of a repeating template nobody has touched; the
@@ -265,6 +269,8 @@ export default function Tasks() {
 
   /* ----- loading ----- */
 
+  const lastSyncRef = useRef(0);
+
   /** The sidebar list for one day: its pages, untouched repeat occurrences and prep entries. */
   const loadDay = useCallback(async (d: string, repeatingP: Promise<RepeatingTemplate[]>) => {
     const dd = fromISODate(d);
@@ -384,6 +390,7 @@ export default function Tasks() {
             .catch(() => {});
         }
       }
+      lastSyncRef.current = Date.now();
       setBanner(null);
       // A quiet poll that succeeds also clears an earlier connection error.
       setStatus((s) => (quiet && s.kind !== "err" ? s : { kind: "ok", msg: "Synced" }));
@@ -513,6 +520,8 @@ export default function Tasks() {
     const tick = () => {
       if (document.visibilityState !== "visible") return;
       if (inflightRef.current > 0 || hasPending()) return;
+      const live = liveRef.current === "proven";
+      if (live && Date.now() - lastSyncRef.current < LIVE_POLL_MS) return;
       refreshLists();
       refreshOpen();
     };
@@ -529,6 +538,68 @@ export default function Tasks() {
       window.removeEventListener("pagehide", flushAll);
     };
   }, [refreshLists, refreshOpen, flushAll]);
+
+  // Live updates: another device's edit triggers a refetch within a moment.
+  // "proven" once any change event has come through (our own echoes count),
+  // which is what lets the poll slow down; until then it keeps its pace.
+  const liveRef = useRef<"off" | "joined" | "proven">("off");
+  const syncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const syncOpenToo = useRef(false);
+  const syncSoon = useCallback(
+    (open: boolean) => {
+      if (open) syncOpenToo.current = true;
+      if (syncTimer.current) return;
+      syncTimer.current = setTimeout(() => {
+        syncTimer.current = null;
+        const withOpen = syncOpenToo.current;
+        syncOpenToo.current = false;
+        // After our own queued writes, so the refetch can't undo them.
+        chainRef.current.then(() => {
+          refreshLists();
+          if (!withOpen) return;
+          // refreshOpen leaves the page alone while edits are pending: wait for a pause in typing.
+          const attempt = (n: number) => {
+            if (hasPending() && n < 20) setTimeout(() => attempt(n + 1), 500);
+            else refreshOpen();
+          };
+          attempt(0);
+        });
+      }, 250);
+    },
+    [refreshLists, refreshOpen]
+  );
+  useEffect(() => {
+    if (!SHARED) return;
+    const onChange = (c: Change) => {
+      liveRef.current = "proven";
+      const id = String(c.record.id ?? c.old.id ?? "");
+      const key =
+        c.table === "task_repeat_exceptions"
+          ? `${c.record.template_id ?? c.old.template_id}|${c.record.occurrence_day ?? c.old.occurrence_day}`
+          : id;
+      if (key && wroteRecently(key)) return; // the echo of our own write
+      const pageOf = c.table === "task_blocks" ? String(c.record.page_id ?? c.old.page_id ?? "") : id;
+      if (pageOf && pageOf !== openRef.current?.page.id) pageCache.current.delete(pageOf);
+      const cur = openRef.current;
+      const touchesOpen =
+        !!cur &&
+        (pageOf === cur.page.id ||
+          (c.table === "task_blocks" && cur.blocks.some((b) => b.id === id)) || // a DELETE carries only the id
+          (c.table === "task_pages" && cur.virtual?.templateId === id));
+      syncSoon(touchesOpen);
+    };
+    const onLive = (live: boolean) => {
+      if (!live) {
+        liveRef.current = "off";
+        return;
+      }
+      if (liveRef.current === "off") {
+        liveRef.current = "joined";
+        syncSoon(true); // catch up on anything missed while disconnected
+      }
+    };
+    return subscribeTasks(onChange, onLive);
+  }, [syncSoon]);
 
   // A new working day (3:00): whatever was showing, close it and start from
   // the new day's list with no page open. The tablet app stays open for days
@@ -588,7 +659,17 @@ export default function Tasks() {
   const commitBlocks = (fn: (blocks: Block[]) => Block[]) => {
     const cur = openRef.current;
     if (!cur) return;
-    setOpen({ ...cur, blocks: fn(cur.blocks).sort(byPosition) });
+    const blocks = fn(cur.blocks).sort(byPosition);
+    setOpen({ ...cur, blocks });
+    // The sidebar's progress ring follows at once; the server confirms it later.
+    const todos = blocks.filter((b) => b.kind === "todo");
+    const done = todos.filter((b) => b.done).length;
+    const ids = [cur.page.id, cur.virtual?.key];
+    const bump = (l: PageSummary[]) =>
+      l.map((p) =>
+        ids.includes(p.id) && !p.prep ? { ...p, todo_total: todos.length, todo_done: done } : p
+      );
+    setLists((l) => ({ ...l, dated: bump(l.dated), undated: bump(l.undated) }));
   };
   const closeOpen = () => {
     setOpen(null);
@@ -901,18 +982,15 @@ export default function Tasks() {
       ensureReal();
       commitBlocks((bs) => bs.map((b) => (b.id === id ? { ...b, kind } : b)));
       flushBlock(id);
-      enqueue(async () => {
-        await store.updateBlock(id, { kind });
-        await refreshLists();
-      });
+      enqueue(() => store.updateBlock(id, { kind }));
+      syncSoon(false);
     },
     toggleDone(id, done) {
       ensureReal();
       commitBlocks((bs) => bs.map((b) => (b.id === id ? { ...b, done } : b)));
-      enqueue(async () => {
-        await store.updateBlock(id, { done });
-        await refreshLists();
-      });
+      if (done) navigator.vibrate?.(8); // a light tick on Android; ignored elsewhere
+      enqueue(() => store.updateBlock(id, { done }));
+      syncSoon(false); // prep entries and the like; several ticks share one refresh
     },
     insertAfter(afterId, kind, text, leadDays) {
       ensureReal();
@@ -934,10 +1012,8 @@ export default function Tasks() {
       };
       if (afterId) flushBlock(afterId); // the split left new text in the block above
       commitBlocks((bs) => [...bs, block]);
-      enqueue(async () => {
-        await store.insertBlocks([block]);
-        if (kind === "todo") await refreshLists();
-      });
+      enqueue(() => store.insertBlocks([block]));
+      if (kind === "todo") syncSoon(false);
       return block.id;
     },
     deleteBlock(id) {
@@ -948,10 +1024,8 @@ export default function Tasks() {
       pendingText.current.delete(id);
       const wasTodo = openRef.current?.blocks.find((b) => b.id === id)?.kind === "todo";
       commitBlocks((bs) => bs.filter((b) => b.id !== id));
-      enqueue(async () => {
-        await store.deleteBlock(id);
-        if (wasTodo) await refreshLists();
-      });
+      enqueue(() => store.deleteBlock(id));
+      if (wasTodo) syncSoon(false);
     },
     mergeIntoPrevious(id) {
       ensureReal();
@@ -979,8 +1053,8 @@ export default function Tasks() {
       enqueue(async () => {
         await store.updateBlock(prev.id, { text: merged, images });
         await store.deleteBlock(me.id);
-        if (me.kind === "todo") await refreshLists();
       });
+      if (me.kind === "todo") syncSoon(false);
       return { prevId: prev.id, offset };
     },
     movePage(targetDay) {
