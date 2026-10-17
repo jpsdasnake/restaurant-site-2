@@ -158,6 +158,21 @@ a plain WebSocket (still no supabase-js) and subscribes to
 - Ticking a box updates the sidebar's progress ring locally; several ticks
   share one list refresh.
 
+### Kitchen timers
+
+- A step that mentions a time ("rest 30 min", "1 h 15 min", "20–25
+  minutes", the lower figure) gets a ⏱ button (`src/lib/tasks-durations.ts`
+  finds them; bare "m" doesn't count). Tapping it starts a timer; on an
+  untouched repeat that also starts the page.
+- Timers are per device (`timers.ts`, localStorage `tasks-timers-v1`): they
+  survive a reload and keep running whatever is open. The bar bottom right
+  shows each one with pause and cancel; tapping one opens its page.
+- When one runs out it turns red and beeps (Web Audio) and buzzes every
+  2.5 s for up to two minutes until Stop. Sound needs a tap since load,
+  which any touch of the screen gives. Its page's sidebar row shows ⏱ while
+  running and "⏰ Done" when it has gone off.
+- While a page is open the screen is kept on (Wake Lock).
+
 ### Offline and start-up
 
 - **Snapshot.** The lists (days around today, Ongoing, templates) and the

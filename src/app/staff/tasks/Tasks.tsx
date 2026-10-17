@@ -28,6 +28,8 @@ import Editor, { type EditorActions, type Focus } from "./Editor";
 import NewPageView from "./NewPageView";
 import PageMenu from "./PageMenu";
 import type { PickTarget } from "./PagePicker";
+import TimerBar from "./TimerBar";
+import { useTimers } from "./timers";
 import useWakeLock from "./useWakeLock";
 import styles from "./tasks.module.css";
 
@@ -714,6 +716,7 @@ export default function Tasks() {
   }, [pageId]);
 
   useWakeLock(Boolean(pageId));
+  const timers = useTimers();
 
   const nowMs = useSyncExternalStore(subscribeClock, getClock, noSnapshot);
 
@@ -1463,6 +1466,9 @@ export default function Tasks() {
       enqueue(() => store.updateBlock(id, { position }));
       return true;
     },
+    markStarted() {
+      ensureReal();
+    },
     removeImage(id, imageId) {
       ensureReal();
       const b = openRef.current?.blocks.find((x) => x.id === id);
@@ -1498,6 +1504,9 @@ export default function Tasks() {
     );
 
   const isToday = day === today;
+  // Pages with a timer, for a badge on their row.
+  const timerOn: Record<string, "running" | "ringing"> = {};
+  for (const t of timers) timerOn[t.pageId] = t.ringing || timerOn[t.pageId] === "ringing" ? "ringing" : "running";
   // Minutes into the working day: past midnight counts on from 24:00.
   const clock = nowMs === null ? null : new Date(nowMs);
   const nowMin = clock && clock.getHours() * 60 + clock.getMinutes() + (clock.getHours() < DAY_START_HOUR ? 1440 : 0);
@@ -1581,6 +1590,7 @@ export default function Tasks() {
             title={isToday ? "Today’s pages" : "Pages"}
             items={dated}
             nowMin={isToday ? nowMin : null}
+            timerOn={timerOn}
             openId={lead > 0 && pageId ? prepId(pageId, lead) : pageId}
             empty={lists.day === day || dayCache[day] || snapshot?.days[day] ? "Nothing planned for this day." : ""}
             onAdd={() => setNewFor({ day })}
@@ -1593,6 +1603,7 @@ export default function Tasks() {
           title="Ongoing"
           items={undated}
           openId={pageId}
+          timerOn={timerOn}
           empty="Pages that aren’t tied to a day live here."
           onAdd={() => setNewFor({ day: null })}
           onOpen={(id, l) => go({ page: id, lead: l ?? 0 })}
@@ -1609,6 +1620,7 @@ export default function Tasks() {
         </div>
       </aside>
 
+      <TimerBar onOpen={(id) => go({ page: id, lead: 0 })} />
       {/* Outside <main>: on a phone the list is showing after a page is deleted. */}
       {toast && (
         <div className={styles.toast} role="status">
@@ -1723,6 +1735,7 @@ type SectionProps = {
   empty: string;
   /** Today only: minutes into the working day, for the now line, late pages and Done. */
   nowMin?: number | null;
+  timerOn?: Record<string, "running" | "ringing">;
   onAdd: () => void;
   onOpen: (id: string, lead?: number) => void;
   onMove: (id: string, day: string | null) => void;
@@ -1740,6 +1753,7 @@ function Section({
   openId,
   empty,
   nowMin = null,
+  timerOn = {},
   onAdd,
   onOpen,
   onMove,
@@ -1821,8 +1835,16 @@ function Section({
               {p.virtual && <span className={styles.virtIcon}>↻</span>}
               {p.title || "Untitled"}
             </span>
-            {(p.start_min !== null || p.todo_total > 0) && (
+            {(p.start_min !== null || p.todo_total > 0 || timerOn[p.id]) && (
               <span className={styles.itemMeta}>
+                {timerOn[p.id] && (
+                  <span
+                    className={timerOn[p.id] === "ringing" ? styles.metaRinging : styles.metaTimer}
+                    title={timerOn[p.id] === "ringing" ? "A timer has gone off" : "A timer is running"}
+                  >
+                    {timerOn[p.id] === "ringing" ? "⏰ Done" : "⏱"}
+                  </span>
+                )}
                 {p.start_min !== null && (
                   <span className={late ? styles.metaLate : ""}>{fmtMin(p.start_min)}</span>
                 )}

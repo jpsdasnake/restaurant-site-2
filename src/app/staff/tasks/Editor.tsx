@@ -21,6 +21,7 @@ import PageMenu from "./PageMenu";
 import PagePicker, { type PickTarget } from "./PagePicker";
 import RecipeTable from "./RecipeTable";
 import RepeatDialog from "./RepeatDialog";
+import StepTimers, { type TimerPage } from "./StepTimers";
 import styles from "./tasks.module.css";
 
 /* ---------- slash menu ---------- */
@@ -106,6 +107,8 @@ export type EditorActions = {
   /** Upload files and attach them to the block. Rejects with a readable message. */
   addImages: (id: string, files: File[]) => Promise<void>;
   removeImage: (id: string, imageId: string) => void;
+  /** Starting a timer counts as starting the page (an untouched repeat becomes real). */
+  markStarted: () => void;
   /** Swap the block with its neighbour above (-1) or below (1). Returns false at an edge. */
   moveBlock: (id: string, dir: -1 | 1) => boolean;
   /** Do this block (and, for a header, its section) `days` before the page's day. */
@@ -241,6 +244,8 @@ export default function Editor({
       onFocusHandled();
     }
   }, [focus, onFocusHandled]);
+
+  const timerPage: TimerPage = { id: page.id, title: page.title, emoji: page.emoji };
 
   const focusFirstOrCreate = () => {
     if (ordered.length) {
@@ -421,6 +426,7 @@ export default function Editor({
                     selected={selected?.has(b.id) ?? false}
                     onToggleSelect={() => toggleSelect(b.id)}
                     onStartSelect={() => startSelect(b.id)}
+                    timerPage={timerPage}
                   />
                 );
               })}
@@ -551,6 +557,8 @@ type RowProps = {
   selected: boolean;
   onToggleSelect: () => void;
   onStartSelect: () => void;
+  /** Where a timer started from this block takes you back to. */
+  timerPage: TimerPage;
 };
 
 function BlockRow({
@@ -574,6 +582,7 @@ function BlockRow({
   selected,
   onToggleSelect,
   onStartSelect,
+  timerPage,
 }: RowProps) {
   const ref = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -938,6 +947,7 @@ function BlockRow({
           }, 150);
         }}
       />
+      {!selecting && <StepTimers block={block} page={timerPage} onStart={actions.markStarted} />}
       <div className={`${styles.gripWrap} ${grip ? styles.gripOpen : ""}`} ref={gripRef}>
         <button
           type="button"

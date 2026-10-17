@@ -1876,6 +1876,151 @@ span.emojiBtn {
   font-size: 14px;
 }
 
+/* ---------- timers ---------- */
+
+.stepTimers {
+  flex: 0 0 auto;
+  display: inline-flex;
+  gap: 4px;
+  margin-top: 1px;
+}
+.stepTimer {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.stepTimer:hover {
+  background: var(--accent-bg);
+}
+.stepTimerOn {
+  border-color: transparent;
+  background: var(--accent-bg);
+  cursor: default;
+}
+.stepTimersBig .stepTimer {
+  min-height: 48px;
+  padding: 0 18px;
+  font-size: 18px;
+}
+.metaTimer {
+  color: var(--accent);
+}
+.metaRinging {
+  color: var(--danger);
+  font-weight: 700;
+  animation: blink 1s ease-in-out infinite;
+}
+
+.timerBar {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 250;
+  width: min(380px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* Clear of the select-mode action bar and the toast. */
+.page:has(.selBar) .timerBar,
+.page:has(.toast) .timerBar {
+  bottom: 88px;
+}
+.timer {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 14px;
+  background: var(--inverse-bg);
+  color: var(--inverse-ink);
+  box-shadow: var(--shadow-modal);
+  animation: toastIn 0.18s ease-out;
+}
+.timerMain {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  text-align: left;
+}
+.timerEmoji {
+  font-size: 20px;
+}
+.timerText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+.timerLabel,
+.timerPage {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.timerLabel {
+  font-size: 14px;
+  font-weight: 600;
+}
+.timerPage {
+  font-size: 12px;
+  opacity: 0.7;
+}
+.timerClock {
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.timerBtn,
+.timerStop {
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.12);
+  color: inherit;
+  font-size: 14px;
+}
+.timerStop {
+  padding: 0 16px;
+  background: var(--inverse-ink);
+  color: var(--danger);
+  font-weight: 700;
+}
+.timerPaused .timerClock {
+  opacity: 0.55;
+}
+.timerRinging {
+  background: var(--danger);
+  animation: ring 0.9s ease-in-out infinite;
+}
+@keyframes ring {
+  50% {
+    transform: scale(1.03);
+    box-shadow: 0 0 0 8px color-mix(in srgb, var(--danger) 25%, transparent);
+  }
+}
+@keyframes blink {
+  50% {
+    opacity: 0.35;
+  }
+}
+
 /* ---------- motion ---------- */
 
 /* A new day's list slides in from the side it came from. */
@@ -1950,6 +2095,10 @@ span.emojiBtn {
   .toast {
     left: 16px;
     max-width: calc(100vw - 32px);
+  }
+  .timerBar {
+    left: 16px;
+    width: auto;
   }
   .rtHead,
   .rtRow {
